@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Stage → Notion",
+  "version": "0.1.0",
+  "description": "Capture des offres de stage depuis une page web et ajout/mise à jour dans une base Notion.",
+  "permissions": ["activeTab", "storage", "scripting", "tabs"],
+  "host_permissions": ["https://api.notion.com/*"],
+  "action": {
+    "default_title": "Stage → Notion",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html"
+}

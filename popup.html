@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stage - Notion</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 12px; width: 360px; }
+      h3 { margin: 0 0 8px; font-size: 16px; }
+      .row { display: flex; gap: 8px; margin-bottom: 10px; }
+      button { padding: 8px 10px; border-radius: 10px; border: 1px solid #ddd; background: white; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      pre { white-space: pre-wrap; font-size: 12px; background: #fafafa; border: 1px solid #eee; padding: 8px; border-radius: 10px; max-height: 220px; overflow: auto; }
+      .msg { margin: 8px 0 0; font-size: 12px; }
+      .hint { font-size: 12px; color: #666; margin-top: 8px; }
+      a { color: inherit; }
+    </style>
+  </head>
+  <body>
+    <h3>Stage - Notion</h3>
+
+    <div class="row">
+      <button id="extract">Lire la page</button>
+      <button id="add" disabled>Ajouter a Notion</button>
+    </div>
+    <div class="row">
+      <button id="check">Verifier connexion + charger</button>
+    </div>
+
+    <div style="margin-top: 6px;">
+      <label>
+        <input type="checkbox" id="applied" />
+        J'ai deja postule
+      </label>
+    </div>
+
+    <pre id="preview">Clique sur "Lire la page" pour extraire les infos.</pre>
+    <pre id="existing">Aucune ligne chargee.</pre>
+    <pre id="columns">Aucune colonne chargee.</pre>
+    <p class="msg" id="msg"></p>
+
+    <p class="hint">
+      Configurer Notion via <a href="options.html" target="_blank" rel="noreferrer">Options</a>.
+    </p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
