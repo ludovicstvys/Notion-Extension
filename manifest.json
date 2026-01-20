@@ -3,14 +3,32 @@
   "name": "Stage → Notion",
   "version": "0.1.0",
   "description": "Capture des offres de stage depuis une page web et ajout/mise à jour dans une base Notion.",
-  "permissions": ["activeTab", "storage", "scripting", "tabs"],
-  "host_permissions": ["https://api.notion.com/*"],
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://api.notion.com/*"
+  ],
   "action": {
     "default_title": "Stage → Notion",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"
   },
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png",
+    "512": "icons/icon-512.png"
+  }
 }
