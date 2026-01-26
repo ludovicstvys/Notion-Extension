@@ -5,6 +5,7 @@
   "description": "Capture des offres de stage depuis une page web et ajout/mise à jour dans une base Notion.",
   "permissions": [
     "activeTab",
+    "alarms",
     "storage",
     "scripting",
     "tabs"

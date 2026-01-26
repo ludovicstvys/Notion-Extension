@@ -9,6 +9,12 @@
       input { width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid #ddd; }
       button { padding: 8px 10px; border-radius: 10px; border: 1px solid #ddd; background: white; cursor: pointer; }
       .row { margin: 10px 0; }
+      .grid { display: grid; grid-template-columns: 1fr 140px; gap: 10px; }
+      .limits { margin-top: 10px; border: 1px solid #eee; border-radius: 12px; padding: 10px; }
+      .limit-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f1f1; }
+      .limit-row:last-child { border-bottom: 0; }
+      .limit-label { font-size: 14px; }
+      .limit-actions { display: flex; gap: 8px; }
       code { background: #fafafa; padding: 2px 6px; border-radius: 8px; border: 1px solid #eee; }
       .note { font-size: 12px; color: #666; }
     </style>
@@ -30,6 +36,29 @@
 
     <button id="save">Enregistrer</button>
     <p id="status"></p>
+
+    <hr />
+    <h3>Limites de temps par URL</h3>
+    <div class="row">
+      <div class="grid">
+        <div>
+          <label for="limit-url">URL ou domaine</label>
+          <input id="limit-url" placeholder="ex: youtube.com" autocomplete="off" />
+        </div>
+        <div>
+          <label for="limit-minutes">Minutes / jour</label>
+          <input id="limit-minutes" type="number" min="1" step="1" placeholder="30" />
+        </div>
+      </div>
+      <div class="row">
+        <button id="add-limit">Ajouter une limite</button>
+        <span id="limit-status" class="note"></span>
+      </div>
+      <p class="note">La correspondance se fait par inclusion dans l'URL (ex: <code>youtube.com</code> ou <code>example.com/path</code>).</p>
+      <div id="limits" class="limits">
+        <div class="note">Aucune limite configuree.</div>
+      </div>
+    </div>
 
     <hr />
     <h3>Important</h3>
