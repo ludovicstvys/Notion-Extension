@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Actus Finance - Stage Notion</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+      :root {
+        --bg: #f7f7f5;
+        --surface: #ffffff;
+        --surface-2: #f2f1ee;
+        --accent: #2563eb;
+        --muted: #6b7280;
+        --text: #0f172a;
+        --border: rgba(15, 23, 42, 0.1);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 20px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Space Grotesk", system-ui, sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      h1 { margin: 0; font-size: 26px; }
+      .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+      .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .filters input,
+      .filters select {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-size: 13px;
+      }
+      .preset {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        padding: 6px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+      .btn {
+        border: none;
+        padding: 8px 12px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+        background: var(--accent);
+        color: #fff;
+      }
+      .btn:focus-visible,
+      a:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .note { font-size: 12px; color: var(--muted); }
+      .grid {
+        display: grid;
+        gap: 10px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px 14px;
+        display: grid;
+        gap: 6px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      }
+      .article {
+        cursor: pointer;
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+      }
+      .article:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12);
+      }
+      .title { font-weight: 600; font-size: 15px; }
+      .meta { font-size: 12px; color: var(--muted); }
+      a { color: var(--accent); text-decoration: none; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Actualites Finance</h1>
+        <p class="note">Derniers articles Yahoo Finance (maj auto toutes les 15 min).</p>
+      </div>
+      <div class="controls">
+        <button class="btn" id="refresh" aria-label="Actualiser">Actualiser</button>
+      </div>
+    </header>
+
+    <div class="card" style="margin-bottom: 12px;">
+      <div class="filters">
+        <input type="text" id="symbols" placeholder="Tickers, ex: AAPL, MSFT, ^GSPC" aria-label="Tickers" />
+        <div class="filters" id="market-presets"></div>
+        <select id="category" aria-label="Categorie">
+          <option value="">Toutes categories</option>
+          <option value="world">Monde</option>
+          <option value="technology">Tech</option>
+          <option value="industrials">Industrie</option>
+          <option value="energy">Energie</option>
+          <option value="healthcare">Sante</option>
+          <option value="financials">Finance</option>
+          <option value="consumer">Consumer</option>
+        </select>
+        <select id="region" aria-label="Region">
+          <option value="US">US</option>
+          <option value="FR">FR</option>
+          <option value="GB">UK</option>
+          <option value="DE">DE</option>
+        </select>
+        <select id="lang" aria-label="Langue">
+          <option value="en-US">English</option>
+          <option value="fr-FR">Francais</option>
+        </select>
+        <label class="toggle">
+          <input type="checkbox" id="quick" aria-label="Lecture rapide" />
+          <span>Lecture rapide</span>
+        </label>
+        <button class="btn" id="save" aria-label="Appliquer">Appliquer</button>
+      </div>
+    </div>
+
+    <p class="note" id="status">Chargement...</p>
+    <div class="grid" id="news"></div>
+
+    <script src="yahoo.js"></script>
+  </body>
+</html>

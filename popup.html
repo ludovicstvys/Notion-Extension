@@ -60,6 +60,7 @@
         margin-bottom: 10px;
       }
       .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .row.single { grid-template-columns: 1fr; }
       button {
         border: none;
         padding: 10px 12px;
@@ -78,6 +79,12 @@
       }
       button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
       button:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(34, 197, 94, 0.2); }
+      button:focus-visible,
+      a:focus-visible,
+      input:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
       .checkline {
         display: flex;
         align-items: center;
@@ -116,20 +123,7 @@
       </header>
 
       <section class="card">
-        <div class="row">
-          <button id="extract">Lire la page</button>
-          <button id="add" class="secondary" disabled>Ajouter a Notion</button>
-        </div>
-        <div class="checkline" style="margin-top: 8px;">
-          <input type="checkbox" id="applied" />
-          <label for="applied">J'ai deja postule</label>
-        </div>
-        <pre id="preview">Clique sur "Lire la page" pour extraire les infos.</pre>
-        <p class="msg" id="msg"></p>
-      </section>
-
-      <section class="card">
-        <strong>Stages ouverts</strong>
+        <strong>Stages ouverts (non postule)</strong>
         <p class="hint" id="open-stages-status">Chargement...</p>
         <ul id="open-stages" class="stage-list">
           <li class="hint">Aucun stage charge.</li>
@@ -144,9 +138,27 @@
         </ul>
       </section>
 
-      <p class="hint">
-        Configurer Notion via <a href="options.html" target="_blank" rel="noreferrer">Options</a>.
-      </p>
+      <section class="card">
+        <strong>Ajouter a Notion</strong>
+        <div class="row" style="margin-top: 8px;">
+          <button id="add" class="secondary" aria-label="Ajouter a Notion">Ajouter a Notion</button>
+          <label class="checkline" style="justify-content: flex-end;">
+            <input type="checkbox" id="applied" aria-label="J'ai deja postule" />
+            J'ai deja postule
+          </label>
+        </div>
+        <pre id="preview" style="display:none;"></pre>
+        <p class="msg" id="msg"></p>
+        <p class="hint" id="offline-status"></p>
+      </section>
+
+      <div class="row single" style="margin-top: 10px;">
+        <button class="secondary nav-btn" data-href="home.html" type="button">Dashboard</button>
+        <button class="secondary nav-btn" data-href="calendar.html" type="button">Calendrier</button>
+        <button class="secondary nav-btn" data-href="yahoo.html" type="button">Yahoo</button>
+        <button class="secondary nav-btn" data-href="search.html" type="button">Recherche</button>
+        <button class="secondary nav-btn" data-href="options.html" type="button">Options</button>
+      </div>
     </div>
 
     <script src="popup.js"></script>

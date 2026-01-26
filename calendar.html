@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Calendrier - Stage Notion</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+      :root {
+        --bg: #f7f7f5;
+        --surface: #ffffff;
+        --surface-2: #f2f1ee;
+        --accent: #2563eb;
+        --accent-2: #16a34a;
+        --muted: #6b7280;
+        --text: #0f172a;
+        --danger: #e11d48;
+        --border: rgba(15, 23, 42, 0.1);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 20px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Space Grotesk", system-ui, sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      h1 { margin: 0; font-size: 26px; }
+      .controls {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .nav { display: inline-flex; gap: 6px; }
+      .filters {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      .filters input[type="text"] {
+        flex: 1 1 240px;
+        min-width: 200px;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 10px;
+      }
+      .filter-group {
+        display: inline-flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .filter {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        padding: 6px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .filter.active {
+        background: var(--accent);
+        color: #fff;
+        border-color: transparent;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 260px 1fr;
+        gap: 12px;
+        align-items: start;
+      }
+      @media (max-width: 900px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+      .tabs {
+        display: inline-flex;
+        gap: 6px;
+        background: var(--surface-2);
+        padding: 4px;
+        border-radius: 10px;
+      }
+      .tab {
+        border: none;
+        padding: 8px 12px;
+        border-radius: 10px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .tab.active {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text);
+        box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+      }
+      input[type="date"] {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 10px;
+      }
+      .btn {
+        border: none;
+        padding: 8px 12px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+        background: var(--accent);
+        color: #fff;
+      }
+      .btn:focus-visible,
+      .tab:focus-visible,
+      .filter:focus-visible,
+      a:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .btn.secondary {
+        background: rgba(148, 163, 184, 0.15);
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+      .note { font-size: 12px; color: var(--muted); }
+      .calendar-list {
+        display: grid;
+        gap: 8px;
+        max-height: 520px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+      .events {
+        display: grid;
+        gap: 8px;
+      }
+      .calendar-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--text);
+        overflow: hidden;
+      }
+      .calendar-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+      }
+      .calendar-view {
+        display: grid;
+        gap: 8px;
+      }
+      .calendar-week {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 8px;
+      }
+      .calendar-month {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 8px;
+      }
+      .day-header {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .day-cell {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 8px;
+        background: var(--surface-2);
+        min-height: 120px;
+        display: grid;
+        gap: 6px;
+      }
+      .day-number {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .event-chip {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 6px 8px 6px 10px;
+        display: grid;
+        gap: 4px;
+        border-left: 3px solid var(--accent);
+      }
+      .event-title { font-weight: 600; font-size: 12px; }
+      .event-meta { font-size: 11px; color: var(--muted); }
+      .event a { color: var(--accent); text-decoration: none; font-size: 11px; }
+      .event-join {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        border-radius: 8px;
+        background: rgba(37, 99, 235, 0.1);
+        color: var(--accent);
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Calendrier</h1>
+        <p class="note">Vue jour / semaine / mois. Notifications 30 min avant.</p>
+      </div>
+      <div class="controls">
+        <div class="tabs" role="tablist" aria-label="Vues calendrier">
+          <button class="tab active" data-view="day" role="tab" aria-selected="true">Jour</button>
+          <button class="tab" data-view="week" role="tab" aria-selected="false">Semaine</button>
+          <button class="tab" data-view="month" role="tab" aria-selected="false">Mois</button>
+        </div>
+        <div class="nav">
+          <button class="btn secondary" id="prev">Precedent</button>
+          <button class="btn secondary" id="next">Suivant</button>
+        </div>
+        <button class="btn secondary" id="today">Aujourd'hui</button>
+        <input type="date" id="date" aria-label="Date" />
+        <button class="btn" id="refresh" aria-label="Actualiser">Actualiser</button>
+      </div>
+    </header>
+
+    <div class="filters card">
+      <input type="text" id="search" placeholder="Rechercher un evenement..." aria-label="Rechercher un evenement" />
+      <div class="filter-group">
+        <button class="filter active" data-filter="all" aria-pressed="true">Tous</button>
+        <button class="filter" data-filter="meet" aria-pressed="false">Google Meet</button>
+        <button class="filter" data-filter="zoom" aria-pressed="false">Zoom</button>
+        <button class="filter" data-filter="teams" aria-pressed="false">Teams</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <h3>Calendriers</h3>
+        <p class="note" id="calendar-status">Chargement...</p>
+        <div class="calendar-list" id="calendar-list"></div>
+        <div class="note" style="margin-top: 10px;">Notifications 30 min avant</div>
+        <div class="calendar-list" id="notify-list"></div>
+      </section>
+      <div style="display: grid; gap: 12px;">
+        <section class="card">
+          <h3>Prochains evenements</h3>
+          <p class="note" id="next-status">Chargement...</p>
+          <div class="events" id="next-events"></div>
+        </section>
+        <section class="card">
+          <h3>Evenements</h3>
+          <p class="note" id="events-status">Aucun evenement charge.</p>
+          <div class="calendar-view" id="calendar-view"></div>
+        </section>
+      </div>
+    </div>
+
+    <script src="calendar.js"></script>
+  </body>
+</html>

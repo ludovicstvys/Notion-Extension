@@ -6,13 +6,25 @@
   "permissions": [
     "activeTab",
     "alarms",
+    "identity",
+    "notifications",
     "storage",
     "scripting",
     "tabs"
   ],
   "host_permissions": [
-    "https://api.notion.com/*"
+    "https://api.notion.com/*",
+    "https://www.googleapis.com/*",
+    "https://feeds.finance.yahoo.com/*",
+    "https://query1.finance.yahoo.com/*"
   ],
+  "oauth2": {
+    "client_id": "608348086080-dp8647muci5st4em00pdgvrba75jq3db.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/calendar.events"
+    ]
+  },
   "action": {
     "default_title": "Stage → Notion",
     "default_popup": "popup.html",

@@ -27,7 +27,7 @@
         font-family: "Space Grotesk", system-ui, sans-serif;
       }
       .wrap {
-        max-width: 900px;
+        max-width: 1280px;
         margin: 0 auto;
       }
       header {
@@ -40,15 +40,15 @@
       .subtitle { color: var(--muted); margin: 6px 0 0; }
       .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 16px;
       }
       .card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        padding: 16px;
-        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.35);
+        background: linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(11, 19, 36, 0.95));
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
       }
       label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
       input {
@@ -61,6 +61,24 @@
         font-size: 14px;
       }
       input::placeholder { color: rgba(148, 163, 184, 0.6); }
+      select {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text);
+        font-size: 14px;
+      }
+      textarea {
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text);
+        font-size: 13px;
+        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+      }
       button {
         border: none;
         padding: 10px 14px;
@@ -78,6 +96,13 @@
         border: 1px solid var(--border);
       }
       button:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(34, 197, 94, 0.2); }
+      button:focus-visible,
+      a:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
       .actions { display: flex; gap: 8px; flex-wrap: wrap; }
       .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
       pre {
@@ -95,6 +120,8 @@
       .section-title { margin: 0 0 8px; font-size: 16px; }
       ul { margin: 6px 0 0 16px; color: var(--muted); }
       code { background: rgba(148, 163, 184, 0.15); padding: 2px 6px; border-radius: 8px; }
+      .tag-row { display: grid; grid-template-columns: 140px 1fr 40px; gap: 8px; margin-top: 8px; }
+      .tag-row input { width: 100%; }
     </style>
   </head>
   <body>
@@ -127,9 +154,140 @@
         </section>
 
         <section class="card">
+          <h3 class="section-title">Mapping Notion</h3>
+          <p class="note">Associe chaque champ a la colonne correspondante dans ta base.</p>
+          <div class="grid" style="margin-top: 10px;">
+            <div>
+              <label for="map-job-title">Nom du poste</label>
+              <select id="map-job-title"></select>
+            </div>
+            <div>
+              <label for="map-company">Entreprise</label>
+              <select id="map-company"></select>
+            </div>
+            <div>
+              <label for="map-location">Lieu</label>
+              <select id="map-location"></select>
+            </div>
+            <div>
+              <label for="map-url">Lien offre</label>
+              <select id="map-url"></select>
+            </div>
+            <div>
+              <label for="map-status">Status</label>
+              <select id="map-status"></select>
+            </div>
+            <div>
+              <label for="map-application-date">Application Date</label>
+              <select id="map-application-date"></select>
+            </div>
+            <div>
+              <label for="map-open-date">Date d'ouverture</label>
+              <select id="map-open-date"></select>
+            </div>
+            <div>
+              <label for="map-close-date">Date de fermeture</label>
+              <select id="map-close-date"></select>
+            </div>
+            <div>
+              <label for="map-start-month">Start month</label>
+              <select id="map-start-month"></select>
+            </div>
+            <div>
+              <label for="map-role">Role</label>
+              <select id="map-role"></select>
+            </div>
+            <div>
+              <label for="map-type">Type d'infrastructure</label>
+              <select id="map-type"></select>
+            </div>
+          </div>
+          <div class="grid" style="margin-top: 12px;">
+            <div>
+              <label for="status-open">Nom du status ouvert</label>
+              <input id="status-open" placeholder="Ouvert" />
+            </div>
+            <div>
+              <label for="status-applied">Nom du status candidature envoyee</label>
+              <input id="status-applied" placeholder="Candidature envoyee" />
+            </div>
+          </div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="map-save">Sauver le mapping</button>
+            <button id="map-refresh" class="secondary">Rafraichir colonnes</button>
+          </div>
+          <p class="note" id="map-status-msg"></p>
+        </section>
+
+        <section class="card">
+          <h3 class="section-title">Google Calendar</h3>
+          <p class="note">Connecte ton compte Google pour synchroniser les evenements.</p>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="gcal-login">Connexion Google</button>
+            <button id="gcal-logout" class="secondary">Deconnexion</button>
+          </div>
+          <div style="margin-top: 12px;">
+            <label for="gcal-default">Calendrier par defaut (creation)</label>
+            <select id="gcal-default"></select>
+          </div>
+          <div class="actions" style="margin-top: 8px;">
+            <button id="gcal-refresh" class="secondary">Rafraichir calendriers</button>
+          </div>
+          <div style="margin-top: 12px;">
+            <label>
+              <input type="checkbox" id="notion-sync-enabled" />
+              Sync Notion → Calendar (auto)
+            </label>
+          </div>
+          <div class="actions" style="margin-top: 8px;">
+            <button id="notion-sync-now" class="secondary">Sync maintenant</button>
+          </div>
+          <p class="note" id="notion-sync-status"></p>
+          <p id="gcal-status" class="note"></p>
+        </section>
+
+        <section class="card">
           <h3 class="section-title">Etat de la base</h3>
           <pre id="existing">Aucune ligne chargee.</pre>
           <pre id="columns">Aucune colonne chargee.</pre>
+        </section>
+
+        <section class="card">
+          <h3 class="section-title">Auto-tags</h3>
+          <p class="note">Regles simples: mot-cle -> tag. Separe les mots-cles par virgule.</p>
+          <div id="tag-rules"></div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="tag-add">Ajouter une regle</button>
+            <button id="tag-save" class="secondary">Sauver</button>
+          </div>
+          <p class="note" id="tag-status"></p>
+        </section>
+
+        <section class="card">
+          <h3 class="section-title">Deadlines</h3>
+          <label>
+            <input type="checkbox" id="deadline-enabled" />
+            Activer les alertes de deadline
+          </label>
+          <div style="margin-top: 8px;">
+            <label for="deadline-offsets">Delais d'alerte (heures, separees par virgule)</label>
+            <input id="deadline-offsets" placeholder="24, 48, 168" />
+          </div>
+          <div class="actions" style="margin-top: 10px;">
+            <button id="deadline-save" class="secondary">Sauver</button>
+          </div>
+          <p class="note" id="deadline-status"></p>
+        </section>
+
+        <section class="card">
+          <h3 class="section-title">Import / Export</h3>
+          <p class="note">Sauvegarde tes preferences et restaure-les.</p>
+          <div class="actions" style="margin-top: 10px;">
+            <button id="export-config">Exporter</button>
+            <button id="import-config" class="secondary">Importer</button>
+          </div>
+          <textarea id="config-data" placeholder="Colle ici le JSON de configuration" style="margin-top:10px; width:100%; min-height:120px;"></textarea>
+          <p class="note" id="config-status"></p>
         </section>
       </div>
 

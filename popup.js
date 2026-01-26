@@ -1,21 +1,27 @@
 const preview = document.getElementById("preview");
 const msg = document.getElementById("msg");
 const addBtn = document.getElementById("add");
-const extractBtn = document.getElementById("extract");
 const appliedCb = document.getElementById("applied");
 const openStagesEl = document.getElementById("open-stages");
 const openStagesStatusEl = document.getElementById("open-stages-status");
 const todoStagesEl = document.getElementById("todo-stages");
 const todoStagesStatusEl = document.getElementById("todo-stages-status");
+const offlineStatusEl = document.getElementById("offline-status");
+const navButtons = Array.from(document.querySelectorAll(".nav-btn"));
 
 let extracted = null;
 
+function normalizeText(input) {
+  const text = (input ?? "").toString();
+  return text.normalize("NFC").trim();
+}
+
 function formatPreview(data) {
-  if (!data) return "Clique sur \"Lire la page\" pour extraire les infos.";
+  if (!data) return "";
   const lines = [
-    `Entreprise: ${data.company || "—"}`,
-    `Poste: ${data.title || "—"}`,
-    `Date de debut: ${data.startDate || "—"}`,
+    `Entreprise: ${normalizeText(data.company) || "—"}`,
+    `Poste: ${normalizeText(data.title) || "—"}`,
+    `Date de debut: ${normalizeText(data.startDate) || "—"}`,
   ];
   return lines.join("\n");
 }
@@ -147,10 +153,10 @@ function scrapeJobInfo() {
   };
 }
 
-extractBtn.addEventListener("click", async () => {
+async function extractFromPage() {
   msg.textContent = "";
   addBtn.disabled = true;
-  preview.textContent = "Extraction...";
+    preview.textContent = "Extraction...";
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -163,14 +169,19 @@ extractBtn.addEventListener("click", async () => {
     extracted = result;
     preview.textContent = formatPreview(extracted);
     addBtn.disabled = false;
+    return true;
   } catch (e) {
     preview.textContent = "";
     msg.textContent = `Impossible d'extraire: ${e?.message || e}`;
+    return false;
   }
-});
+}
 
 addBtn.addEventListener("click", async () => {
-  if (!extracted) return;
+  if (!extracted) {
+    const ok = await extractFromPage();
+    if (!ok) return;
+  }
   msg.textContent = "Envoi a Notion...";
 
   const payload = { ...extracted, applied: appliedCb.checked };
@@ -181,10 +192,34 @@ addBtn.addEventListener("click", async () => {
       return;
     }
 
-    if (res?.ok) msg.textContent = `Ajoute / mis a jour (${res.mode})`;
+    if (res?.ok) {
+      const label = res.mode === "queued" ? "en attente (offline)" : res.mode;
+      msg.textContent = `Ajoute / mis a jour (${label})`;
+    }
     else msg.textContent = `Erreur: ${res?.error || "inconnue"}`;
   });
 });
+
+function parseDateValue(value) {
+  if (!value) return null;
+  const isoMatch = String(value).match(/\b\d{4}-\d{2}-\d{2}\b/);
+  if (isoMatch) return { date: isoMatch[0] };
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, "0");
+    const d = String(parsed.getDate()).padStart(2, "0");
+    return { date: `${y}-${m}-${d}` };
+  }
+  return null;
+}
+
+async function getDefaultCalendarId() {
+  const data = await chrome.storage.local.get(["gcalDefaultCalendar"]);
+  return data.gcalDefaultCalendar || "primary";
+}
+
+
 
 function renderOpenStages(items, capped) {
   openStagesEl.innerHTML = "";
@@ -199,7 +234,9 @@ function renderOpenStages(items, capped) {
 
   items.forEach((item) => {
     const li = document.createElement("li");
-    const label = [item.company, item.title].filter(Boolean).join(" - ") || "Sans titre";
+    const label = [normalizeText(item.company), normalizeText(item.title)]
+      .filter(Boolean)
+      .join(" - ") || "Sans titre";
 
     if (item.url) {
       const link = document.createElement("a");
@@ -263,7 +300,9 @@ function renderTodoStages(items, capped) {
 
   items.forEach((item) => {
     const li = document.createElement("li");
-    const label = [item.company, item.title].filter(Boolean).join(" - ") || "Sans titre";
+    const label = [normalizeText(item.company), normalizeText(item.title)]
+      .filter(Boolean)
+      .join(" - ") || "Sans titre";
 
     if (item.url) {
       const link = document.createElement("a");
@@ -313,3 +352,26 @@ function loadTodoStages() {
 }
 
 loadTodoStages();
+
+function refreshOfflineStatus() {
+  if (!offlineStatusEl) return;
+  chrome.runtime.sendMessage({ type: "OFFLINE_QUEUE_STATUS" }, (res) => {
+    if (!res?.ok) {
+      offlineStatusEl.textContent = "";
+      return;
+    }
+    offlineStatusEl.textContent = res.count
+      ? `${res.count} action(s) en attente (offline).`
+      : "";
+  });
+}
+
+refreshOfflineStatus();
+
+navButtons.forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const href = btn.getAttribute("data-href");
+    if (!href) return;
+    await chrome.tabs.create({ url: chrome.runtime.getURL(href) });
+  });
+});
