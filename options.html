@@ -5,67 +5,142 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Options - Stage - Notion</title>
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 16px; max-width: 780px; }
-      input { width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid #ddd; }
-      button { padding: 8px 10px; border-radius: 10px; border: 1px solid #ddd; background: white; cursor: pointer; }
-      .row { margin: 10px 0; }
-      .grid { display: grid; grid-template-columns: 1fr 140px; gap: 10px; }
-      .limits { margin-top: 10px; border: 1px solid #eee; border-radius: 12px; padding: 10px; }
-      .limit-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f1f1; }
-      .limit-row:last-child { border-bottom: 0; }
-      .limit-label { font-size: 14px; }
-      .limit-actions { display: flex; gap: 8px; }
-      code { background: #fafafa; padding: 2px 6px; border-radius: 8px; border: 1px solid #eee; }
-      .note { font-size: 12px; color: #666; }
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+      :root {
+        --bg: #0f172a;
+        --surface: #111827;
+        --surface-2: #0b1324;
+        --accent: #38bdf8;
+        --accent-2: #22c55e;
+        --muted: #94a3b8;
+        --text: #e2e8f0;
+        --danger: #fb7185;
+        --border: rgba(148, 163, 184, 0.25);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 24px;
+        background: radial-gradient(120% 120% at 0% 0%, #1e293b 0%, #0f172a 50%, #0b1224 100%);
+        color: var(--text);
+        font-family: "Space Grotesk", system-ui, sans-serif;
+      }
+      .wrap {
+        max-width: 900px;
+        margin: 0 auto;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+      }
+      h2 { margin: 0; font-size: 28px; }
+      .subtitle { color: var(--muted); margin: 6px 0 0; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 12px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.35);
+      }
+      label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+      input {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text);
+        font-size: 14px;
+      }
+      input::placeholder { color: rgba(148, 163, 184, 0.6); }
+      button {
+        border: none;
+        padding: 10px 14px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+        background: linear-gradient(135deg, rgba(56, 189, 248, 0.95), rgba(34, 197, 94, 0.9));
+        color: #082f49;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      button.secondary {
+        background: rgba(148, 163, 184, 0.15);
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+      button:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(34, 197, 94, 0.2); }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+      pre {
+        margin: 10px 0 0;
+        white-space: pre-wrap;
+        font-size: 11px;
+        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        padding: 12px;
+        border-radius: 12px;
+        max-height: 220px;
+        overflow: auto;
+      }
+      .section-title { margin: 0 0 8px; font-size: 16px; }
+      ul { margin: 6px 0 0 16px; color: var(--muted); }
+      code { background: rgba(148, 163, 184, 0.15); padding: 2px 6px; border-radius: 8px; }
     </style>
   </head>
   <body>
-    <h2>Configuration Notion</h2>
+    <div class="wrap">
+      <header>
+        <div>
+          <h2>Configuration Notion</h2>
+          <p class="subtitle">Connecte ton espace Notion et teste la base en un clic.</p>
+        </div>
+      </header>
 
-    <div class="row">
-      <label for="token">Notion Secret (Internal Integration)</label>
-      <input id="token" placeholder="secret_..." autocomplete="off" />
-      <p class="note">Tip: create an internal Notion integration and share the database with it.</p>
-    </div>
-
-    <div class="row">
-      <label for="db">Database ID or URL</label>
-      <input id="db" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
-      <p class="note">You can paste the full database URL (Copy link) or the database ID.</p>
-    </div>
-
-    <button id="save">Enregistrer</button>
-    <p id="status"></p>
-
-    <hr />
-    <h3>Limites de temps par URL</h3>
-    <div class="row">
       <div class="grid">
-        <div>
-          <label for="limit-url">URL ou domaine</label>
-          <input id="limit-url" placeholder="ex: youtube.com" autocomplete="off" />
-        </div>
-        <div>
-          <label for="limit-minutes">Minutes / jour</label>
-          <input id="limit-minutes" type="number" min="1" step="1" placeholder="30" />
-        </div>
-      </div>
-      <div class="row">
-        <button id="add-limit">Ajouter une limite</button>
-        <span id="limit-status" class="note"></span>
-      </div>
-      <p class="note">La correspondance se fait par inclusion dans l'URL (ex: <code>youtube.com</code> ou <code>example.com/path</code>).</p>
-      <div id="limits" class="limits">
-        <div class="note">Aucune limite configuree.</div>
-      </div>
-    </div>
+        <section class="card">
+          <h3 class="section-title">Acces API</h3>
+          <div>
+            <label for="token">Notion Secret (Internal Integration)</label>
+            <input id="token" placeholder="secret_..." autocomplete="off" />
+            <p class="note">Tip: create an internal Notion integration and share the database with it.</p>
+          </div>
+          <div style="margin-top: 12px;">
+            <label for="db">Database ID or URL</label>
+            <input id="db" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+            <p class="note">You can paste the full database URL (Copy link) or the database ID.</p>
+          </div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="save">Enregistrer</button>
+            <button id="check" class="secondary">Verifier connexion + charger</button>
+          </div>
+          <p id="status" class="note"></p>
+        </section>
 
-    <hr />
-    <h3>Important</h3>
-    <ul>
-      <li>Les noms de colonnes Notion doivent correspondre exactement: <code>Application Date</code>, <code>Date d'ouverture</code>, <code>Date de fermeture</code>, <code>Entreprise</code>, <code>Job Title</code>, <code>lien offre</code>, <code>Lieu</code>, <code>Role</code>, <code>Start month</code>, <code>Status</code>, <code>Type d'infrastructure</code>.</li>
-      <li>Si tu as d'autres noms, modifie-les dans <code>background.js</code> (fonction <code>buildProps</code>).</li>
-    </ul>
+        <section class="card">
+          <h3 class="section-title">Etat de la base</h3>
+          <pre id="existing">Aucune ligne chargee.</pre>
+          <pre id="columns">Aucune colonne chargee.</pre>
+        </section>
+      </div>
+
+      <section class="card" style="margin-top: 12px;">
+        <h3 class="section-title">Important</h3>
+        <ul>
+          <li>Les noms de colonnes Notion doivent correspondre exactement: <code>Application Date</code>, <code>Date d'ouverture</code>, <code>Date de fermeture</code>, <code>Entreprise</code>, <code>Job Title</code>, <code>lien offre</code>, <code>Lieu</code>, <code>Role</code>, <code>Start month</code>, <code>Status</code>, <code>Type d'infrastructure</code>.</li>
+          <li>Si tu as d'autres noms, modifie-les dans <code>background.js</code> (fonction <code>buildProps</code>).</li>
+        </ul>
+      </section>
+    </div>
 
     <script src="options.js"></script>
   </body>

@@ -1,13 +1,24 @@
 const preview = document.getElementById("preview");
-const existing = document.getElementById("existing");
-const columns = document.getElementById("columns");
 const msg = document.getElementById("msg");
 const addBtn = document.getElementById("add");
 const extractBtn = document.getElementById("extract");
-const checkBtn = document.getElementById("check");
 const appliedCb = document.getElementById("applied");
+const openStagesEl = document.getElementById("open-stages");
+const openStagesStatusEl = document.getElementById("open-stages-status");
+const todoStagesEl = document.getElementById("todo-stages");
+const todoStagesStatusEl = document.getElementById("todo-stages-status");
 
 let extracted = null;
+
+function formatPreview(data) {
+  if (!data) return "Clique sur \"Lire la page\" pour extraire les infos.";
+  const lines = [
+    `Entreprise: ${data.company || "—"}`,
+    `Poste: ${data.title || "—"}`,
+    `Date de debut: ${data.startDate || "—"}`,
+  ];
+  return lines.join("\n");
+}
 
 function scrapeJobInfo() {
   const url = location.href;
@@ -150,7 +161,7 @@ extractBtn.addEventListener("click", async () => {
     });
 
     extracted = result;
-    preview.textContent = JSON.stringify(extracted, null, 2);
+    preview.textContent = formatPreview(extracted);
     addBtn.disabled = false;
   } catch (e) {
     preview.textContent = "";
@@ -175,48 +186,130 @@ addBtn.addEventListener("click", async () => {
   });
 });
 
-function formatRows(rows, capped) {
-  if (!rows || rows.length === 0) return "Aucune ligne chargee.";
+function renderOpenStages(items, capped) {
+  openStagesEl.innerHTML = "";
 
-  const lines = rows.map((r, i) => {
-    const parts = [r.title, r.company, r.status].filter(Boolean).join(" - ");
-    const url = r.url ? `\n   ${r.url}` : "";
-    return `${i + 1}. ${parts || "Sans titre"}${url}`;
+  if (!items || items.length === 0) {
+    const li = document.createElement("li");
+    li.className = "hint";
+    li.textContent = "Aucun stage charge.";
+    openStagesEl.appendChild(li);
+    return;
+  }
+
+  items.forEach((item) => {
+    const li = document.createElement("li");
+    const label = [item.company, item.title].filter(Boolean).join(" - ") || "Sans titre";
+
+    if (item.url) {
+      const link = document.createElement("a");
+      link.href = item.url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = label;
+      li.appendChild(link);
+    } else {
+      li.textContent = label;
+    }
+
+    openStagesEl.appendChild(li);
   });
 
-  const capNote = capped ? "\n\n(liste limitee)" : "";
-  return `${rows.length} ligne(s) chargee(s)\n\n${lines.join("\n")}${capNote}`;
+  if (capped) {
+    const li = document.createElement("li");
+    li.className = "hint";
+    li.textContent = "Liste limitee.";
+    openStagesEl.appendChild(li);
+  }
 }
 
-function formatColumns(cols) {
-  if (!cols || cols.length === 0) return "Aucune colonne chargee.";
-  return `Colonnes (${cols.length})\n\n${cols.join("\n")}`;
-}
+function loadOpenStages() {
+  openStagesStatusEl.textContent = "Chargement...";
 
-checkBtn.addEventListener("click", async () => {
-  msg.textContent = "Verification Notion...";
-  existing.textContent = "Chargement...";
-  columns.textContent = "Chargement...";
-  checkBtn.disabled = true;
-
-  chrome.runtime.sendMessage({ type: "CHECK_NOTION_DB" }, (res) => {
-    checkBtn.disabled = false;
+  chrome.runtime.sendMessage({ type: "GET_OPEN_STAGES" }, (res) => {
     if (chrome.runtime.lastError) {
-      msg.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
-      existing.textContent = "Aucune ligne chargee.";
-      columns.textContent = "Aucune colonne chargee.";
+      openStagesStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
+      renderOpenStages([], false);
       return;
     }
 
     if (res?.ok) {
-      const title = res.dbTitle ? ` (${res.dbTitle})` : "";
-      msg.textContent = `Connexion OK${title}.`;
-      existing.textContent = formatRows(res.rows, res.capped);
-      columns.textContent = formatColumns(res.columns);
+      openStagesStatusEl.textContent = "";
+      renderOpenStages(res.items, res.capped);
     } else {
-      msg.textContent = `Erreur: ${res?.error || "inconnue"}`;
-      existing.textContent = "Aucune ligne chargee.";
-      columns.textContent = "Aucune colonne chargee.";
+      const err = res?.error || "inconnue";
+      const hint =
+        err === "Message inconnu."
+          ? "Extension pas rechargee. Recharge l'extension."
+          : `Erreur: ${err}`;
+      openStagesStatusEl.textContent = hint;
+      renderOpenStages([], false);
     }
   });
-});
+}
+
+loadOpenStages();
+
+function renderTodoStages(items, capped) {
+  todoStagesEl.innerHTML = "";
+
+  if (!items || items.length === 0) {
+    const li = document.createElement("li");
+    li.className = "hint";
+    li.textContent = "Aucun stage charge.";
+    todoStagesEl.appendChild(li);
+    return;
+  }
+
+  items.forEach((item) => {
+    const li = document.createElement("li");
+    const label = [item.company, item.title].filter(Boolean).join(" - ") || "Sans titre";
+
+    if (item.url) {
+      const link = document.createElement("a");
+      link.href = item.url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = label;
+      li.appendChild(link);
+    } else {
+      li.textContent = label;
+    }
+
+    todoStagesEl.appendChild(li);
+  });
+
+  if (capped) {
+    const li = document.createElement("li");
+    li.className = "hint";
+    li.textContent = "Liste limitee.";
+    todoStagesEl.appendChild(li);
+  }
+}
+
+function loadTodoStages() {
+  todoStagesStatusEl.textContent = "Chargement...";
+
+  chrome.runtime.sendMessage({ type: "GET_TODO_STAGES" }, (res) => {
+    if (chrome.runtime.lastError) {
+      todoStagesStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
+      renderTodoStages([], false);
+      return;
+    }
+
+    if (res?.ok) {
+      todoStagesStatusEl.textContent = "";
+      renderTodoStages(res.items, res.capped);
+    } else {
+      const err = res?.error || "inconnue";
+      const hint =
+        err === "Message inconnu."
+          ? "Extension pas rechargee. Recharge l'extension."
+          : `Erreur: ${err}`;
+      todoStagesStatusEl.textContent = hint;
+      renderTodoStages([], false);
+    }
+  });
+}
+
+loadTodoStages();

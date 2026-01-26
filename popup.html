@@ -5,43 +5,149 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Stage - Notion</title>
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 12px; width: 360px; }
-      h3 { margin: 0 0 8px; font-size: 16px; }
-      .row { display: flex; gap: 8px; margin-bottom: 10px; }
-      button { padding: 8px 10px; border-radius: 10px; border: 1px solid #ddd; background: white; cursor: pointer; }
-      button:disabled { opacity: 0.5; cursor: not-allowed; }
-      pre { white-space: pre-wrap; font-size: 12px; background: #fafafa; border: 1px solid #eee; padding: 8px; border-radius: 10px; max-height: 220px; overflow: auto; }
-      .msg { margin: 8px 0 0; font-size: 12px; }
-      .hint { font-size: 12px; color: #666; margin-top: 8px; }
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+      :root {
+        --bg: #0f172a;
+        --surface: #111827;
+        --surface-2: #0b1324;
+        --accent: #38bdf8;
+        --accent-2: #22c55e;
+        --muted: #94a3b8;
+        --text: #e2e8f0;
+        --danger: #fb7185;
+        --border: rgba(148, 163, 184, 0.25);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 12px;
+        width: 380px;
+        background: radial-gradient(100% 140% at 0% 0%, #1e293b 0%, #0f172a 55%, #0b1224 100%);
+        color: var(--text);
+        font-family: "Space Grotesk", system-ui, sans-serif;
+      }
+      .shell {
+        background: linear-gradient(140deg, rgba(15, 23, 42, 0.95), rgba(11, 19, 36, 0.95));
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 14px;
+        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.45);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+      .title {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0.2px;
+      }
+      .badge {
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(56, 189, 248, 0.15);
+        border: 1px solid rgba(56, 189, 248, 0.4);
+        color: var(--accent);
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      button {
+        border: none;
+        padding: 10px 12px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 13px;
+        cursor: pointer;
+        background: linear-gradient(135deg, rgba(56, 189, 248, 0.95), rgba(34, 197, 94, 0.9));
+        color: #082f49;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      button.secondary {
+        background: rgba(148, 163, 184, 0.15);
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+      button:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(34, 197, 94, 0.2); }
+      .checkline {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      pre {
+        margin: 8px 0 0;
+        white-space: pre-wrap;
+        font-size: 11px;
+        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        padding: 10px;
+        border-radius: 12px;
+        max-height: 200px;
+        overflow: auto;
+      }
+      .msg { margin: 8px 0 0; font-size: 12px; color: var(--accent); }
+      .msg.error { color: var(--danger); }
+      .hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+      .stage-list { list-style: none; padding: 0; margin: 6px 0 0; max-height: 180px; overflow: auto; }
+      .stage-list li { padding: 6px 0; border-bottom: 1px solid rgba(148, 163, 184, 0.2); }
+      .stage-list li:last-child { border-bottom: 0; }
+      .stage-list a { text-decoration: none; color: var(--text); }
+      .stage-list a:hover { color: var(--accent); }
       a { color: inherit; }
     </style>
   </head>
   <body>
-    <h3>Stage - Notion</h3>
+    <div class="shell">
+      <header>
+        <h3 class="title">Stage - Notion</h3>
+        <span class="badge">Sync rapide</span>
+      </header>
 
-    <div class="row">
-      <button id="extract">Lire la page</button>
-      <button id="add" disabled>Ajouter a Notion</button>
+      <section class="card">
+        <div class="row">
+          <button id="extract">Lire la page</button>
+          <button id="add" class="secondary" disabled>Ajouter a Notion</button>
+        </div>
+        <div class="checkline" style="margin-top: 8px;">
+          <input type="checkbox" id="applied" />
+          <label for="applied">J'ai deja postule</label>
+        </div>
+        <pre id="preview">Clique sur "Lire la page" pour extraire les infos.</pre>
+        <p class="msg" id="msg"></p>
+      </section>
+
+      <section class="card">
+        <strong>Stages ouverts</strong>
+        <p class="hint" id="open-stages-status">Chargement...</p>
+        <ul id="open-stages" class="stage-list">
+          <li class="hint">Aucun stage charge.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <strong>Stages a faire</strong>
+        <p class="hint" id="todo-stages-status">Chargement...</p>
+        <ul id="todo-stages" class="stage-list">
+          <li class="hint">Aucun stage charge.</li>
+        </ul>
+      </section>
+
+      <p class="hint">
+        Configurer Notion via <a href="options.html" target="_blank" rel="noreferrer">Options</a>.
+      </p>
     </div>
-    <div class="row">
-      <button id="check">Verifier connexion + charger</button>
-    </div>
-
-    <div style="margin-top: 6px;">
-      <label>
-        <input type="checkbox" id="applied" />
-        J'ai deja postule
-      </label>
-    </div>
-
-    <pre id="preview">Clique sur "Lire la page" pour extraire les infos.</pre>
-    <pre id="existing">Aucune ligne chargee.</pre>
-    <pre id="columns">Aucune colonne chargee.</pre>
-    <p class="msg" id="msg"></p>
-
-    <p class="hint">
-      Configurer Notion via <a href="options.html" target="_blank" rel="noreferrer">Options</a>.
-    </p>
 
     <script src="popup.js"></script>
   </body>

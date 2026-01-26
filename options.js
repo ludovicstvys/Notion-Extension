@@ -1,13 +1,9 @@
 const tokenEl = document.getElementById("token");
 const dbEl = document.getElementById("db");
 const statusEl = document.getElementById("status");
-const limitUrlEl = document.getElementById("limit-url");
-const limitMinutesEl = document.getElementById("limit-minutes");
-const addLimitBtn = document.getElementById("add-limit");
-const limitsEl = document.getElementById("limits");
-const limitStatusEl = document.getElementById("limit-status");
-
-const LIMITS_KEY = "timeLimitRules";
+const checkBtn = document.getElementById("check");
+const existingEl = document.getElementById("existing");
+const columnsEl = document.getElementById("columns");
 
 chrome.storage.sync.get(["notionToken", "notionDbId"], (v) => {
   tokenEl.value = v.notionToken || "";
@@ -63,91 +59,48 @@ document.getElementById("save").addEventListener("click", async () => {
   statusEl.textContent = "OK. Saved.";
 });
 
-function normalizeLimitPattern(input) {
-  return (input || "").trim();
-}
+function formatRows(rows, capped) {
+  if (!rows || rows.length === 0) return "Aucune ligne chargee.";
 
-function parseLimitMinutes(input) {
-  const val = Number.parseInt(input, 10);
-  if (!Number.isFinite(val) || val <= 0) return null;
-  return val;
-}
-
-function renderLimits(rules) {
-  const items = Array.isArray(rules) ? rules : [];
-  limitsEl.innerHTML = "";
-
-  if (items.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "note";
-    empty.textContent = "Aucune limite configuree.";
-    limitsEl.appendChild(empty);
-    return;
-  }
-
-  items.forEach((rule, index) => {
-    const row = document.createElement("div");
-    row.className = "limit-row";
-
-    const label = document.createElement("div");
-    label.className = "limit-label";
-    label.textContent = `${rule.pattern} - ${rule.minutes} min / jour`;
-
-    const actions = document.createElement("div");
-    actions.className = "limit-actions";
-
-    const delBtn = document.createElement("button");
-    delBtn.textContent = "Supprimer";
-    delBtn.addEventListener("click", async () => {
-      const updated = items.filter((_, i) => i !== index);
-      await chrome.storage.sync.set({ [LIMITS_KEY]: updated });
-      renderLimits(updated);
-    });
-
-    actions.appendChild(delBtn);
-    row.appendChild(label);
-    row.appendChild(actions);
-    limitsEl.appendChild(row);
+  const lines = rows.map((r, i) => {
+    const parts = [r.title, r.company, r.status].filter(Boolean).join(" - ");
+    const url = r.url ? `\n   ${r.url}` : "";
+    return `${i + 1}. ${parts || "Sans titre"}${url}`;
   });
+
+  const capNote = capped ? "\n\n(liste limitee)" : "";
+  return `${rows.length} ligne(s) chargee(s)\n\n${lines.join("\n")}${capNote}`;
 }
 
-async function loadLimits() {
-  const { timeLimitRules } = await chrome.storage.sync.get([LIMITS_KEY]);
-  renderLimits(Array.isArray(timeLimitRules) ? timeLimitRules : []);
+function formatColumns(cols) {
+  if (!cols || cols.length === 0) return "Aucune colonne chargee.";
+  return `Colonnes (${cols.length})\n\n${cols.join("\n")}`;
 }
 
-addLimitBtn.addEventListener("click", async () => {
-  limitStatusEl.textContent = "";
-  const pattern = normalizeLimitPattern(limitUrlEl.value);
-  const minutes = parseLimitMinutes(limitMinutesEl.value);
+checkBtn.addEventListener("click", async () => {
+  statusEl.textContent = "Verification Notion...";
+  existingEl.textContent = "Chargement...";
+  columnsEl.textContent = "Chargement...";
+  checkBtn.disabled = true;
 
-  if (!pattern) {
-    limitStatusEl.textContent = "Entre une URL ou un domaine.";
-    return;
-  }
-  if (!minutes) {
-    limitStatusEl.textContent = "Entre un nombre de minutes valide.";
-    return;
-  }
+  chrome.runtime.sendMessage({ type: "CHECK_NOTION_DB" }, (res) => {
+    checkBtn.disabled = false;
+    if (chrome.runtime.lastError) {
+      statusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
+      existingEl.textContent = "Aucune ligne chargee.";
+      columnsEl.textContent = "Aucune colonne chargee.";
+      return;
+    }
 
-  const { timeLimitRules } = await chrome.storage.sync.get([LIMITS_KEY]);
-  const rules = Array.isArray(timeLimitRules) ? timeLimitRules : [];
-  const normalized = pattern.toLowerCase();
-  const existingIndex = rules.findIndex(
-    (r) => (r.pattern || "").toLowerCase() === normalized
-  );
-
-  if (existingIndex >= 0) {
-    rules[existingIndex] = { pattern, minutes };
-  } else {
-    rules.push({ pattern, minutes });
-  }
-
-  await chrome.storage.sync.set({ [LIMITS_KEY]: rules });
-  renderLimits(rules);
-  limitUrlEl.value = "";
-  limitMinutesEl.value = "";
-  limitStatusEl.textContent = "Limite enregistree.";
+    if (res?.ok) {
+      const title = res.dbTitle ? ` (${res.dbTitle})` : "";
+      statusEl.textContent = `Connexion OK${title}.`;
+      existingEl.textContent = formatRows(res.rows, res.capped);
+      columnsEl.textContent = formatColumns(res.columns);
+    } else {
+      statusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+      existingEl.textContent = "Aucune ligne chargee.";
+      columnsEl.textContent = "Aucune colonne chargee.";
+    }
+  });
 });
-
-loadLimits();
