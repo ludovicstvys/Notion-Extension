@@ -122,7 +122,7 @@ const MARKET_PRESETS = [
   { label: "Brent", symbols: ["BZ=F"] },
   { label: "WTI", symbols: ["CL=F"] },
   { label: "US 10Y", symbols: ["^TNX"] },
-  { label: "US 2Y", symbols: ["^IRX"] },
+  { label: "US 30Y", symbols: ["^TYX"] },
   { label: "FR 10Y", symbols: ["^FR10Y"] },
 ];
 
@@ -147,7 +147,7 @@ function renderPresets() {
 }
 
 function formatPrice(value) {
-  if (value === null || value === undefined) return "";
+  if (value === null || value === undefined) return "N/D";
   if (Number.isFinite(value)) return value.toLocaleString();
   return String(value);
 }
@@ -167,8 +167,7 @@ function refreshPresetQuotes(force) {
         const list = (btn.dataset.symbols || "").split(",").filter(Boolean);
         const first = list[0];
         const quote = first ? bySymbol[first] : null;
-        if (!quote) return;
-        const price = formatPrice(quote.price);
+        const price = formatPrice(quote?.price);
         const base = btn.getAttribute("data-label") || btn.textContent.split("·")[0].trim();
         btn.setAttribute("data-label", base);
         btn.textContent = price ? `${base} · ${price}` : base;

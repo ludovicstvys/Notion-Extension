@@ -20,7 +20,7 @@ const NOTION_SYNC_MAP = "notionCalendarMap";
 const DEADLINE_PREFS_KEY = "deadlinePrefs";
 const DEADLINE_ALARM_PREFIX = "deadline|";
 const OFFLINE_QUEUE_KEY = "offlineQueue";
-const YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote";
+const YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const YAHOO_QUOTE_CACHE_MIN = 5;
 
 async function notionFetch(token, path, method, body) {
@@ -190,23 +190,23 @@ async function getYahooNews(force) {
 async function fetchYahooQuotes(symbols) {
   const list = Array.isArray(symbols) ? symbols.filter(Boolean) : [];
   if (!list.length) return { fetchedAt: Date.now(), bySymbol: {} };
-  const url = `${YAHOO_QUOTE_URL}?symbols=${encodeURIComponent(list.join(","))}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Yahoo Quotes HTTP ${res.status}`);
-  const json = await res.json().catch(() => ({}));
-  const items = json?.quoteResponse?.result || [];
   const bySymbol = {};
-  items.forEach((q) => {
-    if (!q?.symbol) return;
-    bySymbol[q.symbol] = {
-      symbol: q.symbol,
-      price: q.regularMarketPrice,
-      change: q.regularMarketChange,
-      changePct: q.regularMarketChangePercent,
-      currency: q.currency,
-      updatedAt: Date.now(),
-    };
-  });
+  await Promise.all(
+    list.map(async (symbol) => {
+      const url = `${YAHOO_CHART_URL}/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const json = await res.json().catch(() => ({}));
+      const result = json?.chart?.result?.[0];
+      const price = result?.meta?.regularMarketPrice ?? result?.indicators?.quote?.[0]?.close?.slice(-1)?.[0];
+      bySymbol[symbol] = {
+        symbol,
+        price: price ?? null,
+        currency: result?.meta?.currency || "",
+        updatedAt: Date.now(),
+      };
+    })
+  );
   const payload = { fetchedAt: Date.now(), bySymbol };
   await chrome.storage.local.set({ yahooQuotes: payload });
   return payload;
