@@ -119,6 +119,21 @@
         gap: 6px;
         flex-wrap: wrap;
       }
+      .filters-extra {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+        align-items: center;
+      }
+      .filters-extra select {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 10px;
+        min-width: 180px;
+      }
       .filter {
         border: 1px solid var(--border);
         background: var(--surface);
@@ -326,6 +341,29 @@
       #event-location.location-invalid {
         border-color: rgba(251, 113, 133, 0.85);
         box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.2);
+      }
+      .location-spinner {
+        display: none;
+        margin-top: 6px;
+      }
+      .location-spinner.visible {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .location-spinner .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--accent);
+        opacity: 0.7;
+        animation: locationSpinnerPulse 0.9s ease-in-out infinite;
+      }
+      .location-spinner .dot:nth-child(2) { animation-delay: 0.15s; }
+      .location-spinner .dot:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes locationSpinnerPulse {
+        0%, 100% { transform: scale(0.9); opacity: 0.5; }
+        50% { transform: scale(1.15); opacity: 1; }
       }
       .form-header {
         display: flex;
@@ -565,6 +603,19 @@
         <button class="filter" data-filter="zoom" aria-pressed="false">Zoom</button>
         <button class="filter" data-filter="teams" aria-pressed="false">Teams</button>
       </div>
+      <div class="filters-extra">
+        <select id="calendar-filter" aria-label="Filtre calendrier">
+          <option value="all">Tous les calendriers</option>
+        </select>
+        <select id="sort-select" aria-label="Tri des événements">
+          <option value="start-asc">Tri: date croissante</option>
+          <option value="start-desc">Tri: date décroissante</option>
+          <option value="title-asc">Tri: titre A → Z</option>
+          <option value="title-desc">Tri: titre Z → A</option>
+        </select>
+        <button class="btn secondary" id="export-events" type="button">Exporter événements</button>
+        <button class="btn secondary" id="export-diagnostics" type="button">Exporter diagnostics</button>
+      </div>
     </div>
 
         <section class="card form-card form-hidden" id="event-form-card" style="margin-bottom: 12px;">
@@ -587,6 +638,10 @@
             <input id="event-location" type="text" placeholder="Ex: Remote / Paris" autocomplete="off" />
             <div id="event-location-suggestions" class="location-suggestions"></div>
             <p class="note" id="event-location-status" aria-live="polite"></p>
+            <div id="event-location-spinner" class="note location-spinner" aria-live="polite">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span>Recherche d’adresse…</span>
+            </div>
           </div>
           <div>
             <label for="event-attendees" class="field-label">

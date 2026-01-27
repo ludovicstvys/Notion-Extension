@@ -497,9 +497,11 @@ async function fetchYahooQuotes(symbols) {
           const price =
             result?.meta?.regularMarketPrice ??
             result?.indicators?.quote?.[0]?.close?.slice(-1)?.[0];
+          const changePercent = result?.meta?.regularMarketChangePercent;
           bySymbol[symbol] = {
             symbol,
             price: price ?? null,
+            changePercent: Number.isFinite(changePercent) ? changePercent : null,
             currency: result?.meta?.currency || "",
             updatedAt: Date.now(),
           };
@@ -1621,6 +1623,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         syncName: "gcalEvents",
         meta: { timeMin, timeMax, calendarIds: calendarIds || [] },
       }
+    );
+  }
+
+  if (msg?.type === "GCAL_CLEAR_EVENT_CACHE") {
+    return respondWith(
+      chrome.storage.local.remove([GCAL_CACHE_KEY, GCAL_NOTIFIED_KEY]).then(() => ({
+        ok: true,
+      })),
+      sendResponse,
+      "Google Calendar - clear cache",
+      { syncName: "gcalEvents" }
     );
   }
 

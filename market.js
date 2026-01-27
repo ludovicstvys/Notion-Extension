@@ -46,6 +46,12 @@ function formatWithDigits(value, digits) {
   });
 }
 
+function formatChangePercent(value) {
+  if (!Number.isFinite(value)) return "";
+  const sign = value > 0 ? "+" : "";
+  return ` (${sign}${value.toFixed(2)}%)`;
+}
+
 function ensureTickerStyles() {
   if (document.getElementById("market-ticker-style")) return;
   const style = document.createElement("style");
@@ -86,7 +92,8 @@ function renderMarketStrip(container, bySymbol) {
       raw = 1 / raw;
     }
     const value = formatWithDigits(raw, item.digits);
-    return `${item.label}: ${value}`;
+    const change = formatChangePercent(quote?.changePercent);
+    return `${item.label}: ${value}${change}`;
   });
 
   container.innerHTML = "";
