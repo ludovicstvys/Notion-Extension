@@ -23,6 +23,7 @@ function formatEventTime(ev) {
 function makeEventChip(ev) {
   const chip = document.createElement("div");
   chip.className = "event-chip";
+  chip.tabIndex = 0;
 
   const title = document.createElement("div");
   title.className = "event-title";
@@ -35,13 +36,14 @@ function makeEventChip(ev) {
   chip.appendChild(title);
   if (meta.textContent) chip.appendChild(meta);
 
-  if (ev.meetingLink) {
-    const link = document.createElement("a");
-    link.href = ev.meetingLink;
-    link.target = "_blank";
-    link.rel = "noreferrer";
-    link.textContent = "Rejoindre";
-    chip.appendChild(link);
+  const url = ev.meetingLink || ev.htmlLink || "";
+  if (url) {
+    chip.addEventListener("click", () => {
+      window.open(url, "_blank", "noreferrer");
+    });
+    chip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") window.open(url, "_blank", "noreferrer");
+    });
   }
   return chip;
 }
@@ -74,13 +76,14 @@ function renderFocus(items) {
     meta.textContent = item.meta || "";
     row.appendChild(title);
     if (meta.textContent) row.appendChild(meta);
+    row.tabIndex = 0;
     if (item.link) {
-      const link = document.createElement("a");
-      link.href = item.link;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      link.textContent = item.linkLabel || "Ouvrir";
-      row.appendChild(link);
+      row.addEventListener("click", () => {
+        window.open(item.link, "_blank", "noreferrer");
+      });
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") window.open(item.link, "_blank", "noreferrer");
+      });
     }
     focusEl.appendChild(row);
   });
@@ -102,13 +105,14 @@ function renderTodo(items) {
       [item.company, item.title].filter(Boolean).join(" - ") || "Sans titre"
     );
     row.appendChild(title);
+    row.tabIndex = 0;
     if (item.url) {
-      const link = document.createElement("a");
-      link.href = item.url;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      link.textContent = "Ouvrir";
-      row.appendChild(link);
+      row.addEventListener("click", () => {
+        window.open(item.url, "_blank", "noreferrer");
+      });
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") window.open(item.url, "_blank", "noreferrer");
+      });
     }
     todoEl.appendChild(row);
   });
@@ -128,13 +132,14 @@ function renderNews(items) {
     title.className = "event-title";
     title.textContent = normalizeText(item.title || "Article");
     row.appendChild(title);
+    row.tabIndex = 0;
     if (item.link) {
-      const link = document.createElement("a");
-      link.href = item.link;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      link.textContent = "Lire";
-      row.appendChild(link);
+      row.addEventListener("click", () => {
+        window.open(item.link, "_blank", "noreferrer");
+      });
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") window.open(item.link, "_blank", "noreferrer");
+      });
     }
     newsEl.appendChild(row);
   });

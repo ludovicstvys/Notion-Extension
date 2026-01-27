@@ -1,4 +1,4 @@
-{
+﻿{
   "manifest_version": 3,
   "name": "Stage → Notion",
   "version": "0.1.0",
@@ -14,9 +14,14 @@
   ],
   "host_permissions": [
     "https://api.notion.com/*",
-    "https://www.googleapis.com/*",
+    "https://www.googleapis.com/calendar/*",
+    "https://oauth2.googleapis.com/*",
+    "https://maps.googleapis.com/*",
     "https://feeds.finance.yahoo.com/*",
-    "https://query1.finance.yahoo.com/*"
+    "https://query1.finance.yahoo.com/*",
+    "https://data-api.ecb.europa.eu/*",
+    "https://api.webstat.banque-france.fr/*",
+    "https://webstat.banque-france.fr/*"
   ],
   "oauth2": {
     "client_id": "608348086080-dp8647muci5st4em00pdgvrba75jq3db.apps.googleusercontent.com",

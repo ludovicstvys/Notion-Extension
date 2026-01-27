@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="fr">
   <head>
     <meta charset="utf-8" />
@@ -7,22 +7,22 @@
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
       :root {
-        --bg: #f7f7f5;
-        --surface: #ffffff;
-        --surface-2: #f2f1ee;
-        --accent: #2563eb;
-        --accent-2: #16a34a;
-        --muted: #6b7280;
-        --text: #0f172a;
-        --danger: #e11d48;
-        --border: rgba(15, 23, 42, 0.1);
+        --bg: #0b1220;
+        --surface: #0f172a;
+        --surface-2: #0b1324;
+        --accent: #38bdf8;
+        --accent-2: #0ea5e9;
+        --muted: #94a3b8;
+        --text: #e2e8f0;
+        --danger: #fb7185;
+        --border: rgba(148, 163, 184, 0.2);
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
         min-height: 100vh;
         padding: 20px;
-        background: var(--bg);
+        background: radial-gradient(120% 120% at 0% 0%, #0f1b33 0%, #0b1220 55%, #0a1020 100%);
         color: var(--text);
         font-family: "Space Grotesk", system-ui, sans-serif;
       }
@@ -34,6 +34,49 @@
         gap: 12px;
         flex-wrap: wrap;
       }
+      .topnav {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+        width: 100%;
+        justify-content: center;
+        padding: 8px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(15, 23, 42, 0.9);
+        box-shadow: 0 12px 28px rgba(2, 6, 23, 0.45);
+      }
+      .topnav a {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.9);
+        color: var(--text);
+        text-decoration: none;
+        font-size: 12px;
+        font-weight: 600;
+        min-width: 110px;
+        justify-content: center;
+      }
+      .topnav a:hover { border-color: rgba(56, 189, 248, 0.45); color: var(--accent); }
+      .market-strip {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 6px 0 14px;
+      }
+      .market-item {
+        padding: 6px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
       h1 { margin: 0; font-size: 26px; }
       .controls {
         display: flex;
@@ -41,7 +84,20 @@
         flex-wrap: wrap;
         align-items: center;
       }
+      .controls-right {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+      }
       .nav { display: inline-flex; gap: 6px; }
+      .event-controls {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin: 6px 0 10px;
+        justify-content: flex-end;
+      }
       .filters {
         display: flex;
         gap: 12px;
@@ -83,7 +139,7 @@
         border: 1px solid var(--border);
         border-radius: 14px;
         padding: 14px;
-        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.4);
       }
       .grid {
         display: grid;
@@ -115,7 +171,7 @@
         background: var(--surface);
         border: 1px solid var(--border);
         color: var(--text);
-        box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+        box-shadow: 0 8px 18px rgba(2, 6, 23, 0.45);
       }
       input[type="date"] {
         background: var(--surface-2);
@@ -123,6 +179,209 @@
         color: var(--text);
         padding: 8px 10px;
         border-radius: 10px;
+      }
+      input[type="datetime-local"] {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 10px;
+        width: 100%;
+      }
+      .form-grid {
+        display: grid;
+        gap: 8px;
+      }
+      .form-grid.cols-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      @media (max-width: 900px) {
+        .form-grid.cols-2 {
+          grid-template-columns: 1fr;
+        }
+      }
+      .form-hidden {
+        display: none;
+      }
+      
+      .form-actions {
+        display: inline-flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+      }
+      
+      
+      #event-form-card input[type="text"],
+      #event-form-card input[type="datetime-local"] {
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.85), rgba(11, 19, 36, 0.95));
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        color: var(--text);
+        padding: 11px 13px;
+        border-radius: 14px;
+        width: 100%;
+        min-height: 44px;
+        font-size: 14px;
+        font-weight: 600;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+      }
+      #event-form-card input[type="text"]::placeholder,
+      #event-form-card input[type="datetime-local"]::placeholder {
+        color: rgba(148, 163, 184, 0.7);
+        font-weight: 500;
+      }
+      #event-form-card input[type="text"]:hover,
+      #event-form-card input[type="datetime-local"]:hover {
+        border-color: rgba(56, 189, 248, 0.45);
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(11, 19, 36, 0.98));
+      }
+      #event-form-card input[type="text"]:focus-visible,
+      #event-form-card input[type="datetime-local"]:focus-visible {
+        outline: none;
+        border-color: rgba(56, 189, 248, 0.85);
+        box-shadow:
+          0 0 0 3px rgba(56, 189, 248, 0.28),
+          0 10px 24px rgba(14, 165, 233, 0.18);
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(11, 19, 36, 1));
+      }
+      #event-form-card input.attendees-valid {
+        border-color: rgba(34, 197, 94, 0.75);
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+      }
+      #event-form-card input.attendees-invalid {
+        border-color: rgba(251, 113, 133, 0.85);
+        box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.2);
+      }
+      #event-attendees-status {
+        margin: 6px 2px 0;
+        min-height: 16px;
+      }
+      .attendees-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .attendee-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 8px 6px 10px;
+        border-radius: 999px;
+        background: rgba(56, 189, 248, 0.12);
+        border: 1px solid rgba(56, 189, 248, 0.45);
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .attendee-chip button {
+        border: none;
+        background: rgba(15, 23, 42, 0.65);
+        color: var(--text);
+        border-radius: 999px;
+        padding: 2px 6px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+      .attendee-chip button:hover {
+        background: rgba(251, 113, 133, 0.2);
+        border: 1px solid rgba(251, 113, 133, 0.45);
+      }
+      .location-suggestions {
+        margin-top: 6px;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 12px;
+        background: rgba(11, 19, 36, 0.98);
+        box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45);
+        overflow: hidden;
+        display: none;
+      }
+      .location-suggestions.visible {
+        display: block;
+      }
+      .location-suggestion {
+        padding: 8px 10px;
+        cursor: pointer;
+        font-size: 13px;
+        color: var(--text);
+        border-top: 1px solid rgba(148, 163, 184, 0.12);
+      }
+      .location-suggestion:first-child {
+        border-top: none;
+      }
+      .location-suggestion:hover {
+        background: rgba(56, 189, 248, 0.12);
+      }
+      #event-location-status {
+        margin: 6px 2px 0;
+        min-height: 16px;
+      }
+      #event-location.location-valid {
+        border-color: rgba(34, 197, 94, 0.75);
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+      }
+      #event-location.location-invalid {
+        border-color: rgba(251, 113, 133, 0.85);
+        box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.2);
+      }
+      .form-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .form-title {
+        margin: 0;
+        font-size: 18px;
+      }
+      .form-help {
+        margin: 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .form-section {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px dashed rgba(148, 163, 184, 0.25);
+      }
+      .field-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        color: var(--muted);
+      }
+      .field-label .hint {
+        opacity: 0.8;
+      }
+      .form-row {
+        display: grid;
+        gap: 8px;
+      }
+      .duration-row {
+        display: inline-flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+      }
+      .btn.tiny {
+        padding: 6px 8px;
+        font-size: 12px;
+        border-radius: 10px;
+      }
+      .status-ok {
+        color: #86efac;
+      }
+      .status-error {
+        color: var(--danger);
       }
       .btn {
         border: none;
@@ -203,9 +462,26 @@
         display: grid;
         gap: 6px;
       }
+      .day-cell.today {
+        border-color: rgba(56, 189, 248, 0.8);
+        box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+        background: linear-gradient(180deg, rgba(56, 189, 248, 0.12), rgba(11, 19, 36, 0.95));
+      }
       .day-number {
         font-size: 12px;
         color: var(--muted);
+      }
+      .day-number.today {
+        color: var(--text);
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        background: rgba(56, 189, 248, 0.2);
+        border: 1px solid rgba(56, 189, 248, 0.6);
       }
       .event-chip {
         background: var(--surface);
@@ -229,9 +505,40 @@
         color: var(--accent);
         font-weight: 600;
       }
+      .event-actions {
+        display: inline-flex;
+        gap: 6px;
+        margin-top: 4px;
+      }
+      .event-action {
+        border: 1px solid var(--border);
+        background: rgba(15, 23, 42, 0.6);
+        color: var(--text);
+        padding: 4px 8px;
+        border-radius: 8px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .event-action:hover {
+        border-color: rgba(56, 189, 248, 0.6);
+        color: var(--accent);
+      }
+      .event-action.danger:hover {
+        border-color: rgba(251, 113, 133, 0.7);
+        color: var(--danger);
+      }
     </style>
   </head>
   <body>
+    <nav class="topnav">
+      <a href="home.html">Dashboard</a>
+      <a href="calendar.html">Calendrier</a>
+      <a href="yahoo.html">Yahoo</a>
+      <a href="search.html">Recherche</a>
+      <a href="options.html">Options</a>
+    </nav>
+    <div id="market-strip" class="market-strip"></div>
     <header>
       <div>
         <h1>Calendrier</h1>
@@ -243,13 +550,10 @@
           <button class="tab" data-view="week" role="tab" aria-selected="false">Semaine</button>
           <button class="tab" data-view="month" role="tab" aria-selected="false">Mois</button>
         </div>
-        <div class="nav">
-          <button class="btn secondary" id="prev">Precedent</button>
-          <button class="btn secondary" id="next">Suivant</button>
+        <div class="controls-right">
+          <button class="btn secondary" id="create-event-btn" aria-label="Créer un événement">Créer un événement</button>
+          <button class="btn" id="refresh" aria-label="Actualiser">Actualiser</button>
         </div>
-        <button class="btn secondary" id="today">Aujourd'hui</button>
-        <input type="date" id="date" aria-label="Date" />
-        <button class="btn" id="refresh" aria-label="Actualiser">Actualiser</button>
       </div>
     </header>
 
@@ -263,28 +567,128 @@
       </div>
     </div>
 
+        <section class="card form-card form-hidden" id="event-form-card" style="margin-bottom: 12px;">
+      <div class="form-header">
+        <h3 class="form-title">Créer un événement</h3>
+        </div>
+      <div class="form-row">
+        <div>
+          <label for="event-summary" class="field-label">
+            <span>Titre</span>
+            
+          </label>
+          <input id="event-summary" type="text" placeholder="Ex: Entretien ACME" autocomplete="off" />
+        </div>
+        <div class="form-grid cols-2">
+          <div>
+            <label for="event-location" class="field-label">
+              <span>Lieu</span>
+            </label>
+            <input id="event-location" type="text" placeholder="Ex: Remote / Paris" autocomplete="off" />
+            <div id="event-location-suggestions" class="location-suggestions"></div>
+            <p class="note" id="event-location-status" aria-live="polite"></p>
+          </div>
+          <div>
+            <label for="event-attendees" class="field-label">
+              <span>Invités</span>
+              
+            </label>
+            <input id="event-attendees" type="text" placeholder="a@exemple.com, b@exemple.com" autocomplete="off" />
+            <p class="note" id="event-attendees-status" aria-live="polite"></p>
+            <div id="event-attendees-chips" class="attendees-chips"></div>
+          </div>
+        </div>
+        <div>
+          <label for="event-description" class="field-label">
+            <span>Description</span>
+          </label>
+          <input id="event-description" type="text" placeholder="Notes, ordre du jour..." autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-grid cols-2">
+          <div>
+            <label for="event-start" class="field-label">
+              <span>Début</span>
+            </label>
+            <input id="event-start" type="datetime-local" />
+          </div>
+          <div>
+            <label for="event-end" class="field-label">
+              <span>Fin</span>
+            </label>
+            <input id="event-end" type="datetime-local" />
+          </div>
+        </div>
+        <div class="duration-row" aria-label="Durée rapide">
+          <button class="btn secondary tiny" type="button" data-duration="30">+30 min</button>
+          <button class="btn secondary tiny" type="button" data-duration="45">+45 min</button>
+          <button class="btn secondary tiny" type="button" data-duration="60">+1 h</button>
+          <button class="btn secondary tiny" type="button" data-duration="90">+1 h 30</button>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-grid cols-2">
+          <label class="field-label" for="event-use-meet">
+            <span>
+              <input type="checkbox" id="event-use-meet" />
+              Activer Google Meet
+            </span>
+          </label>
+          <label class="field-label" for="event-send-invites">
+            <span>
+              <input type="checkbox" id="event-send-invites" checked />
+              Envoyer les invitations
+            </span>
+          </label>
+        </div>
+        </div>
+
+      <div class="form-actions">
+        <button class="btn" id="event-submit">Créer l’événement</button>
+        <button class="btn secondary" id="event-cancel" type="button">Annuler</button>
+      </div>
+      <p class="note" id="event-form-status" role="status" aria-live="polite"></p>
+    </section>
+
     <div class="grid">
-      <section class="card">
-        <h3>Calendriers</h3>
-        <p class="note" id="calendar-status">Chargement...</p>
-        <div class="calendar-list" id="calendar-list"></div>
-        <div class="note" style="margin-top: 10px;">Notifications 30 min avant</div>
-        <div class="calendar-list" id="notify-list"></div>
-      </section>
       <div style="display: grid; gap: 12px;">
+        <section class="card">
+          <h3>Calendriers</h3>
+          <p class="note" id="calendar-status">Chargement...</p>
+          <div class="calendar-list" id="calendar-list"></div>
+          <div class="note" style="margin-top: 10px;">Notifications 30 min avant</div>
+          <div class="calendar-list" id="notify-list"></div>
+        </section>
         <section class="card">
           <h3>Prochains evenements</h3>
           <p class="note" id="next-status">Chargement...</p>
           <div class="events" id="next-events"></div>
         </section>
+      </div>
+      <div style="display: grid; gap: 12px;">
         <section class="card">
           <h3>Evenements</h3>
+          <div class="event-controls">
+            <div class="nav">
+              <button class="btn secondary" id="prev">Precedent</button>
+              <button class="btn secondary" id="next">Suivant</button>
+            </div>
+            <button class="btn secondary" id="today">Aujourd'hui</button>
+            <input type="date" id="date" aria-label="Date" />
+          </div>
           <p class="note" id="events-status">Aucun evenement charge.</p>
           <div class="calendar-view" id="calendar-view"></div>
         </section>
       </div>
     </div>
 
+    <script src="market.js"></script>
     <script src="calendar.js"></script>
   </body>
 </html>
+
+
+

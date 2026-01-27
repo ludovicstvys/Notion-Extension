@@ -1,4 +1,4 @@
-# Stage → Notion (Extension Chrome)
+﻿# Stage → Notion (Extension Chrome)
 
 Cette extension extrait des informations d’une offre (si possible via JSON-LD `JobPosting`, sinon via OpenGraph/meta) puis crée ou met à jour une ligne dans une base Notion, en évitant les doublons grâce à la colonne **URL**.
 

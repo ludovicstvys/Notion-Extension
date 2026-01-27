@@ -37,12 +37,6 @@ function renderNews(items) {
     meta.className = "meta";
     meta.textContent = formatDate(item.pubDate);
 
-    const link = document.createElement("a");
-    link.href = item.link || "#";
-    link.target = "_blank";
-    link.rel = "noreferrer";
-    link.textContent = "Lire l'article";
-
     card.appendChild(title);
     if (meta.textContent) card.appendChild(meta);
     if (item.description && !quickEl.checked) {
@@ -51,7 +45,6 @@ function renderNews(items) {
       desc.textContent = item.description;
       card.appendChild(desc);
     }
-    card.appendChild(link);
 
     newsEl.appendChild(card);
 
@@ -116,6 +109,7 @@ function loadPrefs() {
 
 const MARKET_PRESETS = [
   { label: "CAC 40", symbols: ["^FCHI"] },
+  { label: "EURO STOXX 600", symbols: ["^STOXX"] },
   { label: "S&P 500", symbols: ["^GSPC"] },
   { label: "NASDAQ", symbols: ["^IXIC"] },
   { label: "DOW", symbols: ["^DJI"] },
@@ -162,16 +156,24 @@ function refreshPresetQuotes(force) {
     (res) => {
       if (!res?.ok) return;
       const bySymbol = res.data?.bySymbol || {};
-      const buttons = presetsEl.querySelectorAll(".preset");
-      buttons.forEach((btn) => {
-        const list = (btn.dataset.symbols || "").split(",").filter(Boolean);
-        const first = list[0];
-        const quote = first ? bySymbol[first] : null;
-        const price = formatPrice(quote?.price);
-        const base = btn.getAttribute("data-label") || btn.textContent.split("·")[0].trim();
-        btn.setAttribute("data-label", base);
-        btn.textContent = price ? `${base} · ${price}` : base;
-      });
+      chrome.runtime.sendMessage(
+        { type: "GET_ECB_FR10Y", payload: { force: !!force } },
+        (ecbRes) => {
+          if (ecbRes?.ok && Number.isFinite(ecbRes.data?.value)) {
+            bySymbol["^FR10Y"] = { symbol: "^FR10Y", price: ecbRes.data.value };
+          }
+          const buttons = presetsEl.querySelectorAll(".preset");
+          buttons.forEach((btn) => {
+            const list = (btn.dataset.symbols || "").split(",").filter(Boolean);
+            const first = list[0];
+            const quote = first ? bySymbol[first] : null;
+            const price = formatPrice(quote?.price);
+            const base = btn.getAttribute("data-label") || btn.textContent.split("·")[0].trim();
+            btn.setAttribute("data-label", base);
+            btn.textContent = price ? `${base} · ${price}` : base;
+          });
+        }
+      );
     }
   );
 }

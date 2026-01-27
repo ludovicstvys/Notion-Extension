@@ -4,6 +4,8 @@ const statusEl = document.getElementById("status");
 const checkBtn = document.getElementById("check");
 const existingEl = document.getElementById("existing");
 const columnsEl = document.getElementById("columns");
+const bdfApiKeyEl = document.getElementById("bdf-api-key");
+const googlePlacesApiKeyEl = document.getElementById("google-places-api-key");
 const gcalLoginBtn = document.getElementById("gcal-login");
 const gcalLogoutBtn = document.getElementById("gcal-logout");
 const gcalStatusEl = document.getElementById("gcal-status");
@@ -29,6 +31,15 @@ const exportBtn = document.getElementById("export-config");
 const importBtn = document.getElementById("import-config");
 const configDataEl = document.getElementById("config-data");
 const configStatusEl = document.getElementById("config-status");
+const diagRunTestsBtn = document.getElementById("diag-run-tests");
+const diagRefreshBtn = document.getElementById("diag-refresh");
+const diagClearErrorsBtn = document.getElementById("diag-clear-errors");
+const diagNotionTestEl = document.getElementById("diag-notion-test");
+const diagGoogleTestEl = document.getElementById("diag-google-test");
+const diagLastSyncEl = document.getElementById("diag-last-sync");
+const diagOfflineQueueEl = document.getElementById("diag-offline-queue");
+const diagSyncStatsEl = document.getElementById("diag-sync-stats");
+const diagErrorsEl = document.getElementById("diag-errors");
 const mapFields = {
   jobTitle: document.getElementById("map-job-title"),
   company: document.getElementById("map-company"),
@@ -46,6 +57,12 @@ const mapFields = {
 chrome.storage.sync.get(["notionToken", "notionDbId"], (v) => {
   tokenEl.value = v.notionToken || "";
   dbEl.value = v.notionDbId || "";
+});
+chrome.storage.local.get(["bdfApiKey"], (v) => {
+  if (bdfApiKeyEl) bdfApiKeyEl.value = v.bdfApiKey || "";
+});
+chrome.storage.local.get(["googlePlacesApiKey"], (v) => {
+  if (googlePlacesApiKeyEl) googlePlacesApiKeyEl.value = v.googlePlacesApiKey || "";
 });
 
 function normalizeDbId(input) {
@@ -92,6 +109,9 @@ document.getElementById("save").addEventListener("click", async () => {
     notionToken: tokenEl.value.trim(),
     notionDbId: normalizedDbId,
   });
+  const bdfApiKey = bdfApiKeyEl?.value?.trim() || "";
+  const googlePlacesApiKey = googlePlacesApiKeyEl?.value?.trim() || "";
+  await chrome.storage.local.set({ bdfApiKey, googlePlacesApiKey });
 
   dbEl.value = normalizedDbId;
   statusEl.textContent = "OK. Saved.";
@@ -128,6 +148,7 @@ if (checkBtn) {
       statusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
       existingEl.textContent = "Aucune ligne chargee.";
       columnsEl.textContent = "Aucune colonne chargee.";
+      refreshDiagnostics(false);
       return;
     }
 
@@ -141,6 +162,7 @@ if (checkBtn) {
       existingEl.textContent = "Aucune ligne chargee.";
       columnsEl.textContent = "Aucune colonne chargee.";
     }
+    refreshDiagnostics(false);
   });
   });
 }
@@ -195,14 +217,17 @@ if (gcalLoginBtn) {
     chrome.runtime.sendMessage({ type: "GCAL_CONNECT" }, (res) => {
       if (chrome.runtime.lastError) {
         gcalStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
+        refreshDiagnostics(false);
         return;
       }
       if (!res?.ok) {
         gcalStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+        refreshDiagnostics(false);
         return;
       }
       refreshGcalStatus();
       loadCalendarsIntoSelect();
+      refreshDiagnostics(false);
     });
   });
 }
@@ -213,6 +238,7 @@ if (gcalLogoutBtn) {
     gcalStatusEl.textContent = "Deconnexion...";
     chrome.runtime.sendMessage({ type: "GCAL_LOGOUT" }, () => {
       refreshGcalStatus();
+      refreshDiagnostics(false);
     });
   });
 }
@@ -252,9 +278,11 @@ if (notionSyncNowBtn) {
     chrome.runtime.sendMessage({ type: "NOTION_SYNC_NOW" }, (res) => {
       if (!res?.ok) {
         if (notionSyncStatusEl) notionSyncStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+        refreshDiagnostics(false);
         return;
       }
       if (notionSyncStatusEl) notionSyncStatusEl.textContent = "Sync terminee.";
+      refreshDiagnostics(false);
     });
   });
 }
@@ -423,6 +451,130 @@ if (deadlineSaveBtn) {
 
 loadDeadlinePrefs();
 
+function formatDateTime(ts) {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleString();
+}
+
+function formatDetails(details) {
+  if (!details || typeof details !== "object") return "";
+  const parts = Object.entries(details)
+    .filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .map(([k, v]) => `${k}=${v}`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
+function formatSyncStats(stats) {
+  if (!stats || typeof stats !== "object" || Object.keys(stats).length === 0) {
+    return "Aucune donnée.";
+  }
+  const entries = Object.entries(stats)
+    .map(([name, value]) => ({ name, value: value || {} }))
+    .sort((a, b) => (b.value.at || 0) - (a.value.at || 0));
+  const lines = entries.map(({ name, value }) => {
+    const when = formatDateTime(value.at);
+    const status = value.status || "unknown";
+    const details = formatDetails(value.details);
+    return `${name}: ${status} @ ${when}${details}`;
+  });
+  return lines.join("\n");
+}
+
+function formatErrors(errors) {
+  if (!Array.isArray(errors) || errors.length === 0) {
+    return "Aucune erreur.";
+  }
+  const lines = errors.slice(0, 20).map((err, idx) => {
+    const when = formatDateTime(err?.at);
+    const ctx = err?.context || "operation";
+    const code = err?.code ? `[${err.code}] ` : "";
+    const msg = err?.message || err?.rawMessage || "Erreur inconnue";
+    return `${idx + 1}. ${when} - ${ctx} - ${code}${msg}`;
+  });
+  return lines.join("\n");
+}
+
+function renderDiagnostics(res) {
+  if (!diagSyncStatsEl || !diagErrorsEl) return;
+  if (diagLastSyncEl) diagLastSyncEl.textContent = formatDateTime(res?.lastSyncAt);
+  if (diagOfflineQueueEl) {
+    diagOfflineQueueEl.textContent = `${res?.offlineQueueCount ?? 0} element(s)`;
+  }
+  diagSyncStatsEl.textContent = formatSyncStats(res?.syncStats);
+  diagErrorsEl.textContent = formatErrors(res?.recentErrors);
+
+  const tests = res?.tests || null;
+  if (tests?.notion) {
+    if (diagNotionTestEl) {
+      diagNotionTestEl.textContent =
+        tests.notion.message || (tests.notion.ok ? "OK" : "Erreur");
+    }
+  } else {
+    if (diagNotionTestEl) {
+      diagNotionTestEl.textContent = res?.notionConfigured
+        ? "Configure (non teste)"
+        : "Non configure";
+    }
+  }
+  if (tests?.google) {
+    if (diagGoogleTestEl) {
+      diagGoogleTestEl.textContent =
+        tests.google.message || (tests.google.ok ? "OK" : "Erreur");
+    }
+  } else {
+    if (diagGoogleTestEl) {
+      diagGoogleTestEl.textContent = res?.googleConnected
+        ? "Connecte (non teste)"
+        : "Non connecte";
+    }
+  }
+}
+
+function setDiagnosticsLoading(label) {
+  if (diagLastSyncEl) diagLastSyncEl.textContent = label;
+  if (diagNotionTestEl) diagNotionTestEl.textContent = label;
+  if (diagGoogleTestEl) diagGoogleTestEl.textContent = label;
+  if (diagOfflineQueueEl) diagOfflineQueueEl.textContent = label;
+}
+
+function refreshDiagnostics(runTests) {
+  if (!diagRefreshBtn && !diagRunTestsBtn) return;
+  const type = runTests ? "DIAG_RUN_TESTS" : "DIAG_GET_STATUS";
+  setDiagnosticsLoading(runTests ? "Tests en cours..." : "Chargement...");
+  chrome.runtime.sendMessage({ type }, (res) => {
+    if (chrome.runtime.lastError) {
+      const msg = chrome.runtime.lastError.message || "Erreur extension";
+      if (diagErrorsEl) diagErrorsEl.textContent = msg;
+      return;
+    }
+    if (!res?.ok) {
+      if (diagErrorsEl) diagErrorsEl.textContent = res?.error || "Erreur inconnue";
+      return;
+    }
+    renderDiagnostics(res);
+  });
+}
+
+if (diagRefreshBtn) {
+  diagRefreshBtn.addEventListener("click", () => refreshDiagnostics(false));
+}
+
+if (diagRunTestsBtn) {
+  diagRunTestsBtn.addEventListener("click", () => refreshDiagnostics(true));
+}
+
+if (diagClearErrorsBtn) {
+  diagClearErrorsBtn.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "DIAG_CLEAR_ERRORS" }, () => {
+      refreshDiagnostics(false);
+    });
+  });
+}
+
+refreshDiagnostics(false);
+
 async function exportConfig() {
   const syncData = await chrome.storage.sync.get([
     "notionToken",
@@ -437,6 +589,8 @@ async function exportConfig() {
     "autoTagRules",
     "deadlinePrefs",
     "notionCalendarSyncEnabled",
+    "bdfApiKey",
+    "googlePlacesApiKey",
   ]);
   return { sync: syncData, local: localData };
 }
@@ -466,6 +620,7 @@ if (importBtn) {
       loadTagRules();
       loadDeadlinePrefs();
       refreshColumns();
+      refreshDiagnostics(false);
     } catch (e) {
       if (configStatusEl) configStatusEl.textContent = "JSON invalide.";
     }

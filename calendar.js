@@ -1,4 +1,4 @@
-const calendarListEl = document.getElementById("calendar-list");
+﻿const calendarListEl = document.getElementById("calendar-list");
 const notifyListEl = document.getElementById("notify-list");
 const calendarStatusEl = document.getElementById("calendar-status");
 const eventsEl = document.getElementById("calendar-view");
@@ -11,6 +11,26 @@ const refreshBtn = document.getElementById("refresh");
 const prevBtn = document.getElementById("prev");
 const nextBtn = document.getElementById("next");
 const todayBtn = document.getElementById("today");
+const createEventBtn = document.getElementById("create-event-btn");
+const eventFormCard = document.getElementById("event-form-card");
+const eventSummaryEl = document.getElementById("event-summary");
+const eventLocationEl = document.getElementById("event-location");
+const eventLocationSuggestionsEl = document.getElementById("event-location-suggestions");
+const eventLocationStatusEl = document.getElementById("event-location-status");
+const eventDescriptionEl = document.getElementById("event-description");
+const eventAttendeesEl = document.getElementById("event-attendees");
+const eventAttendeesStatusEl = document.getElementById("event-attendees-status");
+const eventAttendeesChipsEl = document.getElementById("event-attendees-chips");
+const eventStartEl = document.getElementById("event-start");
+const eventEndEl = document.getElementById("event-end");
+const eventUseMeetEl = document.getElementById("event-use-meet");
+const eventSendInvitesEl = document.getElementById("event-send-invites");
+const eventSubmitBtn = document.getElementById("event-submit");
+const eventCancelBtn = document.getElementById("event-cancel");
+const eventFormStatusEl = document.getElementById("event-form-status");
+const durationBtns = Array.from(
+  document.querySelectorAll("#event-form-card .duration-row [data-duration]")
+);
 const tabs = Array.from(document.querySelectorAll(".tab"));
 const filterBtns = Array.from(document.querySelectorAll(".filter"));
 
@@ -19,6 +39,12 @@ let selectedIds = [];
 let viewMode = "day";
 let meetingFilter = "all";
 let notifyIds = [];
+let isEventFormOpen = false;
+let isSubmittingEvent = false;
+let attendeeChips = [];
+let editingEvent = null;
+let locationSuggestTimeoutId = null;
+let selectedLocationInfo = null;
 
 function todayLocalDateInput() {
   const d = new Date();
@@ -31,6 +57,472 @@ function todayLocalDateInput() {
 function normalizeText(input) {
   const text = (input ?? "").toString();
   return text.normalize("NFC").trim();
+}
+
+function toDateTimeLocalValue(date) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day}T${hh}:${mm}`;
+}
+
+function parseDateTimeLocal(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function collectAttendees(value) {
+  return String(value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+}
+
+function setEventFormStatus(message, type) {
+  if (!eventFormStatusEl) return;
+  eventFormStatusEl.textContent = message || "";
+  eventFormStatusEl.classList.remove("status-ok", "status-error");
+  if (type === "ok") eventFormStatusEl.classList.add("status-ok");
+  if (type === "error") eventFormStatusEl.classList.add("status-error");
+}
+
+function setSubmittingEventForm(nextSubmitting) {
+  isSubmittingEvent = !!nextSubmitting;
+  if (eventSubmitBtn) {
+    eventSubmitBtn.disabled = isSubmittingEvent;
+    eventSubmitBtn.textContent = isSubmittingEvent ? "Création..." : "Créer l’événement";
+  }
+}
+
+function setAttendeesStatus(text, type) {
+  if (!eventAttendeesStatusEl) return;
+  eventAttendeesStatusEl.textContent = text || "";
+  eventAttendeesStatusEl.classList.remove("status-ok", "status-error");
+  if (type === "ok") eventAttendeesStatusEl.classList.add("status-ok");
+  if (type === "error") eventAttendeesStatusEl.classList.add("status-error");
+}
+
+function renderAttendeeChips() {
+  if (!eventAttendeesChipsEl) return;
+  eventAttendeesChipsEl.innerHTML = "";
+  attendeeChips.forEach((email) => {
+    const chip = document.createElement("div");
+    chip.className = "attendee-chip";
+    chip.textContent = email;
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.setAttribute("aria-label", `Supprimer ${email}`);
+    del.textContent = "×";
+    del.addEventListener("click", () => {
+      attendeeChips = attendeeChips.filter((e) => e !== email);
+      renderAttendeeChips();
+      verifyAttendeesField();
+    });
+
+    chip.appendChild(del);
+    eventAttendeesChipsEl.appendChild(chip);
+  });
+}
+
+function verifyAttendeesField() {
+  if (!eventAttendeesEl) return { attendees: [], invalid: [] };
+  const typed = collectAttendees(eventAttendeesEl.value);
+  const attendees = Array.from(new Set([...attendeeChips, ...typed]));
+  const invalid = attendees.filter((email) => !isValidEmail(email));
+
+  eventAttendeesEl.classList.remove("attendees-valid", "attendees-invalid");
+  if (!attendees.length) {
+    setAttendeesStatus("", null);
+    return { attendees, invalid };
+  }
+  if (invalid.length) {
+    eventAttendeesEl.classList.add("attendees-invalid");
+    setAttendeesStatus(`Emails invalides: ${invalid.slice(0, 3).join(", ")}`, "error");
+  } else {
+    eventAttendeesEl.classList.add("attendees-valid");
+    setAttendeesStatus(`${attendees.length} invité(s) vérifié(s).`, "ok");
+  }
+  return { attendees, invalid };
+}
+
+function addAttendeeFromInput() {
+  if (!eventAttendeesEl) return;
+  const value = normalizeText(eventAttendeesEl.value);
+  if (!value) return;
+  const emails = collectAttendees(value);
+  let added = 0;
+  emails.forEach((email) => {
+    if (!isValidEmail(email)) return;
+    if (attendeeChips.includes(email)) return;
+    attendeeChips.push(email);
+    added += 1;
+  });
+  eventAttendeesEl.value = "";
+  if (added > 0) {
+    renderAttendeeChips();
+  }
+  verifyAttendeesField();
+}
+
+function clearAttendeesField() {
+  attendeeChips = [];
+  if (eventAttendeesEl) eventAttendeesEl.value = "";
+  renderAttendeeChips();
+  setAttendeesStatus("", null);
+  eventAttendeesEl?.classList.remove("attendees-valid", "attendees-invalid");
+}
+
+function setLocationStatus(message, type) {
+  if (!eventLocationStatusEl) return;
+  eventLocationStatusEl.textContent = message || "";
+  eventLocationStatusEl.classList.remove("status-ok", "status-error");
+  if (type === "ok") eventLocationStatusEl.classList.add("status-ok");
+  if (type === "error") eventLocationStatusEl.classList.add("status-error");
+}
+
+function setLocationValidityClass(type) {
+  if (!eventLocationEl) return;
+  eventLocationEl.classList.remove("location-valid", "location-invalid");
+  if (type === "ok") eventLocationEl.classList.add("location-valid");
+  if (type === "error") eventLocationEl.classList.add("location-invalid");
+}
+
+function hideLocationSuggestions() {
+  if (!eventLocationSuggestionsEl) return;
+  eventLocationSuggestionsEl.classList.remove("visible");
+  eventLocationSuggestionsEl.innerHTML = "";
+}
+
+function showLocationSuggestions(items) {
+  if (!eventLocationSuggestionsEl) return;
+  eventLocationSuggestionsEl.innerHTML = "";
+  if (!items || items.length === 0) {
+    eventLocationSuggestionsEl.classList.remove("visible");
+    return;
+  }
+  items.slice(0, 6).forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "location-suggestion";
+    row.textContent = item.description || "";
+    row.addEventListener("mousedown", (e) => {
+      // mousedown fires before blur; prevent losing the click.
+      e.preventDefault();
+      pickLocationSuggestion(item);
+    });
+    eventLocationSuggestionsEl.appendChild(row);
+  });
+  eventLocationSuggestionsEl.classList.add("visible");
+}
+
+function pickLocationSuggestion(item) {
+  if (!eventLocationEl) return;
+  const text = item?.description || "";
+  eventLocationEl.value = text;
+  selectedLocationInfo = item || null;
+  hideLocationSuggestions();
+  setLocationValidityClass("ok");
+  setLocationStatus("Adresse suggérée validée.", "ok");
+}
+
+function debounceLocationSuggestions(query) {
+  if (locationSuggestTimeoutId) clearTimeout(locationSuggestTimeoutId);
+  if (!query || query.length < 3) {
+    hideLocationSuggestions();
+    return;
+  }
+  locationSuggestTimeoutId = setTimeout(() => {
+    chrome.runtime.sendMessage(
+      { type: "PLACES_AUTOCOMPLETE", payload: { input: query } },
+      (res) => {
+        if (chrome.runtime.lastError) return;
+        if (!res?.ok) {
+          const msg = res?.error || "";
+          if (msg) setLocationStatus(msg, "error");
+          return;
+        }
+        showLocationSuggestions(res.items || []);
+      }
+    );
+  }, 180);
+}
+
+function geocodeLocationOnBlur() {
+  const address = normalizeText(eventLocationEl?.value || "");
+  if (!address) {
+    setLocationStatus("", null);
+    setLocationValidityClass(null);
+    hideLocationSuggestions();
+    selectedLocationInfo = null;
+    return;
+  }
+  chrome.runtime.sendMessage(
+    { type: "PLACES_GEOCODE", payload: { address } },
+    (res) => {
+      if (chrome.runtime.lastError) return;
+      if (!res?.ok) {
+        setLocationStatus(res?.error || "Adresse non vérifiée.", "error");
+        setLocationValidityClass("error");
+        return;
+      }
+      if (!res.result) {
+        setLocationStatus("Adresse non trouvée.", "error");
+        setLocationValidityClass("error");
+        return;
+      }
+      selectedLocationInfo = {
+        description: res.result.formattedAddress || address,
+        lat: res.result.lat,
+        lng: res.result.lng,
+      };
+      if (eventLocationEl && res.result.formattedAddress) {
+        eventLocationEl.value = res.result.formattedAddress;
+      }
+      setLocationStatus("Adresse vérifiée.", "ok");
+      setLocationValidityClass("ok");
+    }
+  );
+}
+
+function resetEventFormAfterSuccess(message) {
+  editingEvent = null;
+  if (eventSummaryEl) eventSummaryEl.value = "";
+  if (eventLocationEl) eventLocationEl.value = "";
+  if (eventDescriptionEl) eventDescriptionEl.value = "";
+  if (eventUseMeetEl) eventUseMeetEl.checked = false;
+  if (eventSendInvitesEl) eventSendInvitesEl.checked = true;
+  clearAttendeesField();
+  hideLocationSuggestions();
+  selectedLocationInfo = null;
+  setLocationStatus("", null);
+  setLocationValidityClass(null);
+  prefillEventForm();
+  setEventFormStatus(message || "Opération réussie.", "ok");
+}
+
+function buildMeetConferenceData() {
+  const requestId =
+    (typeof crypto !== "undefined" && crypto.randomUUID && crypto.randomUUID()) ||
+    `meet-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return {
+    createRequest: {
+      requestId,
+      conferenceSolutionKey: { type: "hangoutsMeet" },
+    },
+  };
+}
+
+function prefillFormFromEvent(ev) {
+  if (!ev) return;
+  if (eventSummaryEl) eventSummaryEl.value = ev.summary || "";
+  if (eventLocationEl) {
+    eventLocationEl.value = ev.location || "";
+    setLocationValidityClass(null);
+    setLocationStatus("", null);
+  }
+  if (eventDescriptionEl) eventDescriptionEl.value = ev.description || "";
+
+  const start = ev.start ? new Date(ev.start) : null;
+  const end = ev.end ? new Date(ev.end) : null;
+  if (start && !Number.isNaN(start.getTime()) && eventStartEl) {
+    eventStartEl.value = toDateTimeLocalValue(start);
+  }
+  if (end && !Number.isNaN(end.getTime()) && eventEndEl) {
+    eventEndEl.value = toDateTimeLocalValue(end);
+  }
+
+  clearAttendeesField();
+  const emails = Array.isArray(ev.attendees) ? ev.attendees.filter(isValidEmail) : [];
+  if (emails.length) {
+    attendeeChips = Array.from(new Set(emails));
+    renderAttendeeChips();
+    verifyAttendeesField();
+  }
+
+  if (eventUseMeetEl) {
+    eventUseMeetEl.checked = /meet\.google\.com/i.test(ev.meetingLink || "");
+  }
+}
+
+function startEditingEvent(ev) {
+  editingEvent = ev;
+  toggleEventForm(true);
+  prefillFormFromEvent(ev);
+  setEventFormStatus("Mode modification.", null);
+  if (eventSummaryEl) eventSummaryEl.focus();
+}
+
+function applyDurationFromStart(minutes) {
+  if (!eventStartEl || !eventEndEl) return;
+  const start = parseDateTimeLocal(eventStartEl.value);
+  if (!start) return;
+  const end = new Date(start);
+  end.setMinutes(end.getMinutes() + minutes);
+  eventEndEl.value = toDateTimeLocalValue(end);
+}
+
+function toggleEventForm(forceOpen) {
+  if (!eventFormCard) return;
+  const nextOpen = typeof forceOpen === "boolean" ? forceOpen : !isEventFormOpen;
+  isEventFormOpen = nextOpen;
+  eventFormCard.classList.toggle("form-hidden", !nextOpen);
+  if (createEventBtn) {
+    createEventBtn.textContent = nextOpen ? "Fermer le formulaire" : "Créer un événement";
+  }
+}
+
+function prefillEventForm() {
+  if (!eventStartEl || !eventEndEl) return;
+  const base = parseDateInput(dateEl.value);
+  base.setHours(9, 0, 0, 0);
+  const end = new Date(base);
+  end.setHours(base.getHours() + 1);
+  eventStartEl.value = toDateTimeLocalValue(base);
+  eventEndEl.value = toDateTimeLocalValue(end);
+}
+
+async function pickCalendarId() {
+  const { gcalDefaultCalendar } = await chrome.storage.local.get(["gcalDefaultCalendar"]);
+  const writableIds = new Set(
+    calendars
+      .filter((c) => c.accessRole === "owner" || c.accessRole === "writer")
+      .map((c) => c.id)
+  );
+
+  if (writableIds.size === 0) {
+    throw new Error("Aucun calendrier inscriptible (owner/writer) trouvé.");
+  }
+
+  if (gcalDefaultCalendar && writableIds.has(gcalDefaultCalendar)) {
+    return gcalDefaultCalendar;
+  }
+
+  const selectedWritable = selectedIds.find((id) => writableIds.has(id));
+  if (selectedWritable) return selectedWritable;
+
+  if (writableIds.has("primary")) return "primary";
+  const firstWritable = calendars.find(
+    (c) => c.accessRole === "owner" || c.accessRole === "writer"
+  );
+  return firstWritable?.id || "primary";
+}
+
+async function submitCreateEvent() {
+  if (isSubmittingEvent) return;
+  const summary = normalizeText(eventSummaryEl?.value || "");
+  if (!summary) {
+    setEventFormStatus("Titre obligatoire.", "error");
+    return;
+  }
+
+  const start = parseDateTimeLocal(eventStartEl?.value);
+  const end = parseDateTimeLocal(eventEndEl?.value);
+  if (!start || !end || end <= start) {
+    setEventFormStatus("Dates invalides.", "error");
+    return;
+  }
+
+  const { attendees, invalid: invalidEmails } = verifyAttendeesField();
+  if (invalidEmails.length) {
+    setEventFormStatus(`Emails invalides: ${invalidEmails.slice(0, 3).join(", ")}`, "error");
+    return;
+  }
+
+  setSubmittingEventForm(true);
+  setEventFormStatus("Création en cours...", null);
+  let calendarId;
+  try {
+    calendarId = await pickCalendarId();
+  } catch (err) {
+    setSubmittingEventForm(false);
+    setEventFormStatus(err?.message || "Calendrier non inscriptible.", "error");
+    return;
+  }
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const sendUpdates = eventSendInvitesEl?.checked ? "all" : "none";
+
+  const payload = {
+    summary,
+    location: normalizeText(eventLocationEl?.value || ""),
+    description: normalizeText(eventDescriptionEl?.value || ""),
+    start: { dateTime: start.toISOString(), timeZone },
+    end: { dateTime: end.toISOString(), timeZone },
+    attendees,
+    useMeet: !!eventUseMeetEl?.checked,
+    sendUpdates,
+  };
+
+  if (editingEvent?.id && editingEvent?.calendarId) {
+    const patch = {
+      summary: payload.summary,
+      location: payload.location,
+      description: payload.description,
+      start: payload.start,
+      end: payload.end,
+      attendees: payload.attendees.map((email) => ({ email })),
+    };
+    if (payload.useMeet) {
+      patch.conferenceData = buildMeetConferenceData();
+    }
+    chrome.runtime.sendMessage(
+      {
+        type: "GCAL_UPDATE_EVENT",
+        payload: {
+          calendarId: editingEvent.calendarId,
+          eventId: editingEvent.id,
+          patch,
+          sendUpdates,
+        },
+      },
+      (res) => {
+        setSubmittingEventForm(false);
+        if (chrome.runtime.lastError) {
+          setEventFormStatus(`Erreur: ${chrome.runtime.lastError.message}`, "error");
+          return;
+        }
+        if (!res?.ok) {
+          setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
+          return;
+        }
+        resetEventFormAfterSuccess("Événement mis à jour.");
+        loadEvents();
+        loadNextEvents();
+      }
+    );
+    return;
+  }
+
+  chrome.runtime.sendMessage(
+    {
+      type: "GCAL_CREATE_EVENT_WITH_INVITES",
+      payload: { calendarId, event: payload },
+    },
+    (res) => {
+      if (chrome.runtime.lastError) {
+        setSubmittingEventForm(false);
+        setEventFormStatus(`Erreur: ${chrome.runtime.lastError.message}`, "error");
+        return;
+      }
+      if (!res?.ok) {
+        setSubmittingEventForm(false);
+        setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
+        return;
+      }
+      setSubmittingEventForm(false);
+      resetEventFormAfterSuccess("Événement créé.");
+      loadEvents();
+      loadNextEvents();
+    }
+  );
 }
 
 function parseDateInput(value) {
@@ -93,6 +585,10 @@ function dateKey(date) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+function isTodayKey(key) {
+  return key === todayLocalDateInput();
 }
 
 function getEventDateKey(ev) {
@@ -227,6 +723,7 @@ function makeEventChip(ev) {
   const chip = document.createElement("div");
   chip.className = "event-chip";
   chip.style.borderLeftColor = getCalendarColor(ev.calendarId);
+  chip.tabIndex = 0;
 
   const title = document.createElement("div");
   title.className = "event-title";
@@ -257,13 +754,67 @@ function makeEventChip(ev) {
     chip.appendChild(join);
   }
 
-  if (ev.htmlLink) {
-    const link = document.createElement("a");
-    link.href = ev.htmlLink;
-    link.target = "_blank";
-    link.rel = "noreferrer";
-    link.textContent = "Ouvrir";
-    chip.appendChild(link);
+  const actions = document.createElement("div");
+  actions.className = "event-actions";
+
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "event-action";
+  editBtn.textContent = "Modifier";
+  editBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    startEditingEvent(ev);
+  });
+  actions.appendChild(editBtn);
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "event-action danger";
+  delBtn.textContent = "Supprimer";
+  delBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const ok = window.confirm("Supprimer cet événement ?");
+    if (!ok) return;
+    const hasAttendees = Array.isArray(ev.attendees) && ev.attendees.length > 0;
+    chrome.runtime.sendMessage(
+      {
+        type: "GCAL_DELETE_EVENT",
+        payload: {
+          calendarId: ev.calendarId,
+          eventId: ev.id,
+          sendUpdates: hasAttendees ? "all" : "none",
+        },
+      },
+      (res) => {
+        if (chrome.runtime.lastError) {
+          setEventFormStatus(`Erreur: ${chrome.runtime.lastError.message}`, "error");
+          return;
+        }
+        if (!res?.ok) {
+          setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
+          return;
+        }
+        if (editingEvent?.id === ev.id) {
+          editingEvent = null;
+        }
+        setEventFormStatus("Événement supprimé.", "ok");
+        loadEvents();
+        loadNextEvents();
+      }
+    );
+  });
+  actions.appendChild(delBtn);
+
+  chip.appendChild(actions);
+
+  const openUrl = ev.meetingLink || ev.htmlLink || "";
+  if (openUrl) {
+    chip.addEventListener("click", () => {
+      window.open(openUrl, "_blank", "noreferrer");
+    });
+    chip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") window.open(openUrl, "_blank", "noreferrer");
+    });
   }
 
   return chip;
@@ -314,6 +865,9 @@ function renderEvents(items) {
       const cell = document.createElement("div");
       cell.className = "day-cell";
       const key = dateKey(d);
+      if (isTodayKey(key)) {
+        cell.classList.add("today");
+      }
       const dayEvents = groups.get(key) || [];
       dayEvents.forEach((ev) => cell.appendChild(makeEventChip(ev)));
       grid.appendChild(cell);
@@ -349,9 +903,13 @@ function renderEvents(items) {
     const number = document.createElement("div");
     number.className = "day-number";
     number.textContent = d.getDate();
+    const key = dateKey(d);
+    if (isTodayKey(key)) {
+      cell.classList.add("today");
+      number.classList.add("today");
+    }
     if (d.getMonth() !== month) number.style.opacity = "0.4";
     cell.appendChild(number);
-    const key = dateKey(d);
     const dayEvents = groups.get(key) || [];
     dayEvents.slice(0, 3).forEach((ev) => cell.appendChild(makeEventChip(ev)));
     if (dayEvents.length > 3) {
@@ -488,6 +1046,92 @@ todayBtn.addEventListener("click", () => {
   loadEvents();
 });
 
+if (createEventBtn) {
+  createEventBtn.addEventListener("click", () => {
+    const willOpen = !isEventFormOpen;
+    toggleEventForm(willOpen);
+    if (willOpen) {
+      editingEvent = null;
+      clearAttendeesField();
+      hideLocationSuggestions();
+      selectedLocationInfo = null;
+      setLocationStatus("", null);
+      setLocationValidityClass(null);
+      prefillEventForm();
+      if (eventSummaryEl) eventSummaryEl.focus();
+      setEventFormStatus("", null);
+    }
+  });
+}
+
+if (eventCancelBtn) {
+  eventCancelBtn.addEventListener("click", () => {
+    toggleEventForm(false);
+    setEventFormStatus("", null);
+    setAttendeesStatus("", null);
+    clearAttendeesField();
+    hideLocationSuggestions();
+    selectedLocationInfo = null;
+    setLocationStatus("", null);
+    setLocationValidityClass(null);
+    editingEvent = null;
+  });
+}
+
+if (eventSubmitBtn) {
+  eventSubmitBtn.addEventListener("click", submitCreateEvent);
+}
+
+if (eventStartEl) {
+  eventStartEl.addEventListener("change", () => {
+    const start = parseDateTimeLocal(eventStartEl.value);
+    const end = parseDateTimeLocal(eventEndEl?.value);
+    if (!start) return;
+    if (!end || end <= start) {
+      applyDurationFromStart(60);
+    }
+  });
+}
+
+durationBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const minutes = Number.parseInt(btn.dataset.duration || "0", 10);
+    if (!Number.isFinite(minutes) || minutes <= 0) return;
+    applyDurationFromStart(minutes);
+    setEventFormStatus("", null);
+  });
+});
+
+if (eventAttendeesEl) {
+  eventAttendeesEl.addEventListener("input", () => {
+    verifyAttendeesField();
+  });
+  eventAttendeesEl.addEventListener("blur", () => {
+    verifyAttendeesField();
+  });
+  eventAttendeesEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    addAttendeeFromInput();
+  });
+}
+
+if (eventLocationEl) {
+  eventLocationEl.addEventListener("input", () => {
+    selectedLocationInfo = null;
+    setLocationValidityClass(null);
+    setLocationStatus("", null);
+    debounceLocationSuggestions(normalizeText(eventLocationEl.value));
+  });
+  eventLocationEl.addEventListener("blur", () => {
+    // Delay to allow suggestion click via mousedown.
+    setTimeout(() => {
+      hideLocationSuggestions();
+      geocodeLocationOnBlur();
+    }, 120);
+  });
+}
+
 if (searchEl) {
   searchEl.addEventListener("input", () => {
     loadEvents();
@@ -509,3 +1153,6 @@ filterBtns.forEach((btn) => {
 
 dateEl.value = todayLocalDateInput();
 loadCalendars();
+
+
+
