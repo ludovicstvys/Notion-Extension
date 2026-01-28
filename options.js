@@ -11,6 +11,23 @@ const gcalLogoutBtn = document.getElementById("gcal-logout");
 const gcalStatusEl = document.getElementById("gcal-status");
 const gcalDefaultEl = document.getElementById("gcal-default");
 const gcalRefreshBtn = document.getElementById("gcal-refresh");
+const urlBlockerInputEl = document.getElementById("url-blocker-input");
+const urlBlockerListEl = document.getElementById("url-blocker-list");
+const urlBlockerSaveBtn = document.getElementById("url-blocker-save");
+const urlBlockerStatusEl = document.getElementById("url-blocker-status");
+const widgetEventsEl = document.getElementById("widget-events");
+const widgetAddEl = document.getElementById("widget-add");
+const widgetFocusEl = document.getElementById("widget-focus");
+const widgetTodoEl = document.getElementById("widget-todo");
+const widgetNewsEl = document.getElementById("widget-news");
+const widgetTimelineEl = document.getElementById("widget-timeline");
+const widgetSaveBtn = document.getElementById("widget-save");
+const widgetStatusEl = document.getElementById("widget-status");
+const focusEnabledEl = document.getElementById("focus-enabled");
+const pomodoroWorkEl = document.getElementById("pomodoro-work");
+const pomodoroBreakEl = document.getElementById("pomodoro-break");
+const focusSaveBtn = document.getElementById("focus-save");
+const focusStatusEl = document.getElementById("focus-status");
 const notionSyncEnabledEl = document.getElementById("notion-sync-enabled");
 const notionSyncNowBtn = document.getElementById("notion-sync-now");
 const notionSyncStatusEl = document.getElementById("notion-sync-status");
@@ -64,6 +81,46 @@ chrome.storage.local.get(["bdfApiKey"], (v) => {
 chrome.storage.local.get(["googlePlacesApiKey"], (v) => {
   if (googlePlacesApiKeyEl) googlePlacesApiKeyEl.value = v.googlePlacesApiKey || "";
 });
+let urlBlockerRules = [];
+function renderUrlBlockerRules() {
+  if (!urlBlockerListEl) return;
+  urlBlockerListEl.innerHTML = "";
+  urlBlockerRules.forEach((rule) => {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    chip.textContent = rule;
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.setAttribute("aria-label", `Supprimer ${rule}`);
+    del.textContent = "×";
+    del.addEventListener("click", () => {
+      urlBlockerRules = urlBlockerRules.filter((r) => r !== rule);
+      renderUrlBlockerRules();
+    });
+
+    chip.appendChild(del);
+    urlBlockerListEl.appendChild(chip);
+  });
+}
+
+chrome.storage.local.get(["urlBlockerRules"], (v) => {
+  urlBlockerRules = Array.isArray(v.urlBlockerRules) ? v.urlBlockerRules : [];
+  renderUrlBlockerRules();
+});
+
+chrome.storage.local.get(["dashboardWidgets", "focusModeEnabled", "pomodoroWork", "pomodoroBreak"], (v) => {
+  const widgets = v.dashboardWidgets || {};
+  if (widgetEventsEl) widgetEventsEl.checked = widgets.events !== false;
+  if (widgetAddEl) widgetAddEl.checked = widgets.add !== false;
+  if (widgetFocusEl) widgetFocusEl.checked = widgets.focus !== false;
+  if (widgetTodoEl) widgetTodoEl.checked = widgets.todo !== false;
+  if (widgetNewsEl) widgetNewsEl.checked = widgets.news !== false;
+  if (widgetTimelineEl) widgetTimelineEl.checked = widgets.timeline !== false;
+  if (focusEnabledEl) focusEnabledEl.checked = v.focusModeEnabled === true;
+  if (pomodoroWorkEl) pomodoroWorkEl.value = String(v.pomodoroWork || 25);
+  if (pomodoroBreakEl) pomodoroBreakEl.value = String(v.pomodoroBreak || 5);
+});
 
 function normalizeDbId(input) {
   const raw = (input || "").trim();
@@ -116,6 +173,62 @@ document.getElementById("save").addEventListener("click", async () => {
   dbEl.value = normalizedDbId;
   statusEl.textContent = "OK. Saved.";
 });
+
+if (urlBlockerSaveBtn) {
+  urlBlockerSaveBtn.addEventListener("click", async () => {
+    const rules = Array.from(new Set(urlBlockerRules));
+    await chrome.storage.local.set({ urlBlockerRules: rules, urlBlockerEnabled: true });
+    if (urlBlockerStatusEl) {
+      urlBlockerStatusEl.textContent = `Sauvegarde OK (${rules.length} règle(s)).`;
+    }
+    chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
+  });
+}
+
+if (urlBlockerInputEl) {
+  urlBlockerInputEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const value = (urlBlockerInputEl.value || "").trim();
+    if (!value) return;
+    if (!urlBlockerRules.includes(value)) {
+      urlBlockerRules.push(value);
+      renderUrlBlockerRules();
+    }
+    urlBlockerInputEl.value = "";
+  });
+}
+
+if (widgetSaveBtn) {
+  widgetSaveBtn.addEventListener("click", async () => {
+    const dashboardWidgets = {
+      events: !!widgetEventsEl?.checked,
+      add: !!widgetAddEl?.checked,
+      focus: !!widgetFocusEl?.checked,
+      todo: !!widgetTodoEl?.checked,
+      news: !!widgetNewsEl?.checked,
+      timeline: !!widgetTimelineEl?.checked,
+    };
+    await chrome.storage.local.set({ dashboardWidgets });
+    if (widgetStatusEl) widgetStatusEl.textContent = "Widgets sauvegardés.";
+  });
+}
+
+if (focusSaveBtn) {
+  focusSaveBtn.addEventListener("click", async () => {
+    const work = Number.parseInt(pomodoroWorkEl?.value || "25", 10);
+    const rest = Number.parseInt(pomodoroBreakEl?.value || "5", 10);
+    const focusModeEnabled = !!focusEnabledEl?.checked;
+    await chrome.storage.local.set({
+      focusModeEnabled,
+      pomodoroWork: Number.isFinite(work) ? work : 25,
+      pomodoroBreak: Number.isFinite(rest) ? rest : 5,
+      urlBlockerEnabled: focusModeEnabled,
+    });
+    if (focusStatusEl) focusStatusEl.textContent = "Mode focus sauvegardé.";
+    chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
+  });
+}
 
 function formatRows(rows, capped) {
   if (!rows || rows.length === 0) return "Aucune ligne chargee.";
@@ -484,16 +597,66 @@ function formatSyncStats(stats) {
 
 function formatErrors(errors) {
   if (!Array.isArray(errors) || errors.length === 0) {
-    return "Aucune erreur.";
+    return [];
   }
-  const lines = errors.slice(0, 20).map((err, idx) => {
-    const when = formatDateTime(err?.at);
-    const ctx = err?.context || "operation";
-    const code = err?.code ? `[${err.code}] ` : "";
-    const msg = err?.message || err?.rawMessage || "Erreur inconnue";
-    return `${idx + 1}. ${when} - ${ctx} - ${code}${msg}`;
+  const counts = new Map();
+  errors.forEach((err) => {
+    const type = err?.code || err?.context || "unknown";
+    const entry = counts.get(type) || { type, count: 0, sample: err };
+    entry.count += 1;
+    counts.set(type, entry);
   });
-  return lines.join("\n");
+  return Array.from(counts.values()).sort((a, b) => b.count - a.count);
+}
+
+function getErrorRecommendation(err) {
+  const code = String(err?.code || "").toUpperCase();
+  const ctx = String(err?.context || "").toLowerCase();
+  const msg = String(err?.message || err?.rawMessage || "").toLowerCase();
+
+  if (code.includes("AUTH_REQUIRED")) return "Reconnecte Google dans Options.";
+  if (code.includes("NOTION_CONFIG_MISSING")) return "Renseigne Token + Database ID.";
+  if (code.includes("NOTION_DB_ID_INVALID") || code.includes("NOTION_DB_NOT_FOUND")) {
+    return "Vérifie l’ID/URL de la base Notion.";
+  }
+  if (code.includes("PLACES_KEY_MISSING")) return "Ajoute une clé Google Places.";
+  if (code.includes("GCAL_CALENDAR_ID_MISSING")) return "Sélectionne un calendrier par défaut.";
+  if (code.includes("HTTP_401")) return "Vérifie les identifiants/droits d’accès.";
+  if (code.includes("HTTP_403")) return "Vérifie les permissions (writer/owner).";
+  if (msg.includes("writer access")) return "Choisis un calendrier avec accès en écriture.";
+  if (ctx.includes("notion")) return "Vérifie la configuration Notion.";
+  if (ctx.includes("google")) return "Revalide la connexion Google.";
+  return "Réessaye ou vérifie la configuration associée.";
+}
+
+function renderErrorTable(errors) {
+  if (!diagErrorsEl) return;
+  diagErrorsEl.innerHTML = "";
+  const summary = formatErrors(errors);
+  if (summary.length === 0) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 3;
+    cell.className = "diag-empty";
+    cell.textContent = "Aucune erreur.";
+    row.appendChild(cell);
+    diagErrorsEl.appendChild(row);
+    return;
+  }
+
+  summary.forEach((entry) => {
+    const row = document.createElement("tr");
+    const typeCell = document.createElement("td");
+    typeCell.textContent = entry.type;
+    const countCell = document.createElement("td");
+    countCell.textContent = String(entry.count);
+    const recCell = document.createElement("td");
+    recCell.textContent = getErrorRecommendation(entry.sample);
+    row.appendChild(typeCell);
+    row.appendChild(countCell);
+    row.appendChild(recCell);
+    diagErrorsEl.appendChild(row);
+  });
 }
 
 function renderDiagnostics(res) {
@@ -503,7 +666,7 @@ function renderDiagnostics(res) {
     diagOfflineQueueEl.textContent = `${res?.offlineQueueCount ?? 0} element(s)`;
   }
   diagSyncStatsEl.textContent = formatSyncStats(res?.syncStats);
-  diagErrorsEl.textContent = formatErrors(res?.recentErrors);
+  renderErrorTable(res?.recentErrors);
 
   const tests = res?.tests || null;
   if (tests?.notion) {
@@ -591,6 +754,12 @@ async function exportConfig() {
     "notionCalendarSyncEnabled",
     "bdfApiKey",
     "googlePlacesApiKey",
+    "urlBlockerRules",
+    "urlBlockerEnabled",
+    "dashboardWidgets",
+    "focusModeEnabled",
+    "pomodoroWork",
+    "pomodoroBreak",
   ]);
   return { sync: syncData, local: localData };
 }
@@ -619,6 +788,24 @@ if (importBtn) {
       refreshNotionSyncStatus();
       loadTagRules();
       loadDeadlinePrefs();
+      if (urlBlockerListEl) {
+        urlBlockerRules = Array.isArray(parsed?.local?.urlBlockerRules)
+          ? parsed.local.urlBlockerRules
+          : [];
+        renderUrlBlockerRules();
+      }
+      if (widgetEventsEl) {
+        const widgets = parsed?.local?.dashboardWidgets || {};
+        widgetEventsEl.checked = widgets.events !== false;
+        widgetAddEl.checked = widgets.add !== false;
+        widgetFocusEl.checked = widgets.focus !== false;
+        widgetTodoEl.checked = widgets.todo !== false;
+        widgetNewsEl.checked = widgets.news !== false;
+        widgetTimelineEl.checked = widgets.timeline !== false;
+      }
+      if (focusEnabledEl) focusEnabledEl.checked = parsed?.local?.focusModeEnabled === true;
+      if (pomodoroWorkEl) pomodoroWorkEl.value = String(parsed?.local?.pomodoroWork || 25);
+      if (pomodoroBreakEl) pomodoroBreakEl.value = String(parsed?.local?.pomodoroBreak || 5);
       refreshColumns();
       refreshDiagnostics(false);
     } catch (e) {

@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stages - Dashboard</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+      :root {
+        --bg: #0b1220;
+        --surface: #0f172a;
+        --surface-2: #0b1324;
+        --accent: #0a84ff;
+        --accent-2: #34c759;
+        --muted: #94a3b8;
+        --text: #e2e8f0;
+        --border: rgba(148, 163, 184, 0.2);
+        --danger: #ff453a;
+        --neutral: #8e8e93;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 20px;
+        background: radial-gradient(120% 120% at 0% 0%, #0f1b33 0%, #0b1220 55%, #0a1020 100%);
+        color: var(--text);
+        font-family: "Space Grotesk", system-ui, sans-serif;
+      }
+      .topnav {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+        width: 100%;
+        justify-content: center;
+        padding: 8px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(15, 23, 42, 0.9);
+        box-shadow: 0 12px 28px rgba(2, 6, 23, 0.45);
+      }
+      .settings-btn {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        width: 26px;
+        height: 26px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.5);
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        font-size: 13px;
+        z-index: 6;
+      }
+      .settings-btn:hover {
+        border-color: rgba(56, 189, 248, 0.35);
+        color: var(--text);
+        background: rgba(15, 23, 42, 0.75);
+      }
+      .topnav a {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.9);
+        color: var(--text);
+        text-decoration: none;
+        font-size: 12px;
+        font-weight: 600;
+        min-width: 110px;
+        justify-content: center;
+      }
+      .topnav a:hover { border-color: rgba(56, 189, 248, 0.45); color: var(--accent); }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 16px;
+        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+      h1 { margin: 0 0 8px; font-size: 24px; }
+      .note { font-size: 12px; color: var(--muted); }
+      .chart-wrap {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: min(420px, 100%);
+        margin: 0 auto;
+      }
+      canvas {
+        width: 100%;
+        height: auto;
+        max-width: 420px;
+      }
+      .chart-center {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        pointer-events: none;
+      }
+      .chart-center .count {
+        font-size: 30px;
+        font-weight: 700;
+        line-height: 1;
+      }
+      .legend {
+        display: grid;
+        gap: 6px;
+        margin-top: 14px;
+      }
+      .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+      .dot.applied { background: var(--accent-2); }
+      .dot.recale { background: var(--danger); }
+      .dot.other { background: var(--neutral); }
+      .tooltip {
+        position: absolute;
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 10px;
+        font-size: 12px;
+        color: var(--text);
+        pointer-events: none;
+        opacity: 0;
+        transform: translate(-50%, -120%);
+        transition: opacity 0.12s ease;
+        white-space: nowrap;
+      }
+      .tooltip.visible { opacity: 1; }
+      .tooltip .muted { color: var(--muted); font-size: 11px; }
+      .tooltip ul { margin: 6px 0 0; padding-left: 16px; }
+      .status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .list {
+        display: grid;
+        gap: 8px;
+      }
+      .stage-row {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 10px;
+        display: grid;
+        gap: 4px;
+      }
+      .stage-title {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .stage-meta {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .stage-row a {
+        color: var(--accent);
+        text-decoration: none;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="topnav">
+      <a href="home.html">Dashboard</a>
+      <a href="calendar.html">Calendrier</a>
+      <a href="stage.html">Stages</a>
+      <a href="yahoo.html">Yahoo</a>
+      <a href="search.html">Recherche</a>
+    </nav>
+    <a class="settings-btn" href="options.html" aria-label="Options">⚙️</a>
+
+    <section class="card">
+      <h1>Stages</h1>
+      <p class="note">Répartition des statuts (Ouvert, Candidatures envoyées, Autres, Recalé).</p>
+
+      <div class="chart-wrap">
+        <canvas id="stage-chart" width="420" height="420" aria-label="Graphique des stages" role="img"></canvas>
+        <div class="chart-center" id="stage-center">
+        <div class="count">0</div>
+      </div>
+        <div class="tooltip" id="stage-tooltip"></div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-item"><span class="dot"></span> Ouvert</div>
+        <div class="legend-item"><span class="dot applied"></span> Candidatures envoyées</div>
+        <div class="legend-item"><span class="dot other"></span> Autres</div>
+        <div class="legend-item"><span class="dot recale"></span> Recalé</div>
+      </div>
+
+      <p class="status" id="stage-status">Chargement...</p>
+    </section>
+
+    <section class="card">
+      <h2>Stages ouverts</h2>
+      <p class="note" id="stage-open-status">Chargement...</p>
+      <div class="list" id="stage-open-list"></div>
+    </section>
+
+    <script src="stage.js"></script>
+  </body>
+</html>

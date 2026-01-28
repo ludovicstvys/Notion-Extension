@@ -4,8 +4,10 @@ const addBtn = document.getElementById("add");
 const appliedCb = document.getElementById("applied");
 const openStagesEl = document.getElementById("open-stages");
 const openStagesStatusEl = document.getElementById("open-stages-status");
+const openStagesCountEl = document.getElementById("open-stages-count");
 const todoStagesEl = document.getElementById("todo-stages");
 const todoStagesStatusEl = document.getElementById("todo-stages-status");
+const todoStagesCountEl = document.getElementById("todo-stages-count");
 const offlineStatusEl = document.getElementById("offline-status");
 const navButtons = Array.from(document.querySelectorAll(".nav-btn"));
 
@@ -223,6 +225,10 @@ async function getDefaultCalendarId() {
 
 function renderOpenStages(items, capped) {
   openStagesEl.innerHTML = "";
+  if (openStagesCountEl) {
+    const count = Array.isArray(items) ? items.length : 0;
+    openStagesCountEl.textContent = `(${count})`;
+  }
 
   if (!items || items.length === 0) {
     const li = document.createElement("li");
@@ -289,6 +295,10 @@ loadOpenStages();
 
 function renderTodoStages(items, capped) {
   todoStagesEl.innerHTML = "";
+  if (todoStagesCountEl) {
+    const count = Array.isArray(items) ? items.length : 0;
+    todoStagesCountEl.textContent = `(${count})`;
+  }
 
   if (!items || items.length === 0) {
     const li = document.createElement("li");

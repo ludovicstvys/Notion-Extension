@@ -46,6 +46,28 @@
         background: rgba(15, 23, 42, 0.9);
         box-shadow: 0 12px 28px rgba(2, 6, 23, 0.45);
       }
+      .settings-btn {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        width: 26px;
+        height: 26px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.5);
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        font-size: 13px;
+        z-index: 6;
+      }
+      .settings-btn:hover {
+        border-color: rgba(56, 189, 248, 0.35);
+        color: var(--text);
+        background: rgba(15, 23, 42, 0.75);
+      }
       .topnav a {
         display: inline-flex;
         align-items: center;
@@ -76,6 +98,37 @@
         color: var(--muted);
         font-size: 12px;
         font-weight: 600;
+      }
+      .timeline {
+        display: grid;
+        gap: 10px;
+      }
+      .timeline-item {
+        display: grid;
+        grid-template-columns: 10px 1fr;
+        gap: 10px;
+        padding: 8px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+      }
+      .timeline-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        margin-top: 6px;
+        background: var(--accent);
+      }
+      .timeline-title { font-weight: 600; font-size: 13px; }
+      .timeline-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .pomodoro {
+        display: grid;
+        gap: 8px;
+      }
+      .pomodoro-timer {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
       }
       h1 { margin: 0; font-size: 26px; }
       .grid {
@@ -129,16 +182,62 @@
         outline-offset: 2px;
       }
       a.link { color: var(--accent); text-decoration: none; font-size: 12px; }
+      .checkline {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .checkline input[type="checkbox"] {
+        appearance: none;
+        width: 34px;
+        height: 20px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(148, 163, 184, 0.2);
+        position: relative;
+        outline: none;
+        cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease;
+      }
+      .checkline input[type="checkbox"]::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #e2e8f0;
+        transition: transform 0.15s ease;
+      }
+      .checkline input[type="checkbox"]:checked {
+        background: linear-gradient(135deg, rgba(56, 189, 248, 0.95), rgba(14, 165, 233, 0.9));
+        border-color: transparent;
+      }
+      .checkline input[type="checkbox"]:checked::after {
+        transform: translateX(14px);
+        background: #082f49;
+      }
+      .mini-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+      }
     </style>
   </head>
   <body>
     <nav class="topnav">
       <a href="home.html">Dashboard</a>
       <a href="calendar.html">Calendrier</a>
+      <a href="stage.html">Stages</a>
       <a href="yahoo.html">Yahoo</a>
       <a href="search.html">Recherche</a>
-      <a href="options.html">Options</a>
     </nav>
+    <a class="settings-btn" href="options.html" aria-label="Options">⚙️</a>
     <div id="market-strip" class="market-strip"></div>
     <header>
       <div>
@@ -148,25 +247,58 @@
     </header>
 
     <div class="grid">
-      <section class="card">
+      <section class="card" data-widget="events">
         <h3>3 prochains evenements</h3>
         <p class="note" id="home-events-status">Chargement...</p>
         <div class="events" id="home-events"></div>
       </section>
-      <section class="card">
+      <section class="card" data-widget="add">
+        <h3>Ajouter a Notion</h3>
+        <p class="note">Ajoute l’offre de stage de l’onglet actif.</p>
+        <div class="mini-actions">
+          <button class="btn" id="home-add">Ajouter a Notion</button>
+          <label class="checkline">
+            <input type="checkbox" id="home-applied" />
+            J’ai deja postule
+          </label>
+        </div>
+        <p class="note" id="home-add-status"></p>
+      </section>
+      <section class="card" data-widget="focus">
         <h3>Focus du jour</h3>
         <p class="note" id="focus-status">Chargement...</p>
         <div class="list" id="focus-list"></div>
       </section>
-      <section class="card">
+      <section class="card" data-widget="todo">
         <h3>Stages a faire</h3>
         <p class="note" id="home-todo-status">Chargement...</p>
         <div class="list" id="home-todo"></div>
       </section>
-      <section class="card">
+      <section class="card" data-widget="news">
         <h3>News finance</h3>
         <p class="note" id="home-news-status">Chargement...</p>
         <div class="list" id="home-news"></div>
+      </section>
+      <section class="card" data-widget="timeline">
+        <h3>Timeline priorités du jour</h3>
+        <p class="note" id="timeline-status">Chargement...</p>
+        <div class="timeline" id="timeline-list"></div>
+      </section>
+      <section class="card" data-widget="focus-mode">
+        <h3>Mode Focus</h3>
+        <p class="note">Blocage + pomodoro.</p>
+        <label class="checkline">
+          <input type="checkbox" id="focus-switch" />
+          Activer le mode focus
+        </label>
+        <div class="pomodoro">
+          <div class="pomodoro-timer" id="pomodoro-timer">25:00</div>
+          <div class="actions">
+            <button class="btn" id="pomodoro-start">Démarrer</button>
+            <button class="btn secondary" id="pomodoro-pause">Pause</button>
+            <button class="btn secondary" id="pomodoro-reset">Reset</button>
+          </div>
+        </div>
       </section>
     </div>
 

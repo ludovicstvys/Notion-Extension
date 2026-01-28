@@ -12,6 +12,7 @@ const sortSelectEl = document.getElementById("sort-select");
 const exportEventsBtn = document.getElementById("export-events");
 const exportDiagnosticsBtn = document.getElementById("export-diagnostics");
 const refreshBtn = document.getElementById("refresh");
+const refreshStatusEl = document.getElementById("refresh-status");
 const prevBtn = document.getElementById("prev");
 const nextBtn = document.getElementById("next");
 const todayBtn = document.getElementById("today");
@@ -23,11 +24,13 @@ const eventLocationSuggestionsEl = document.getElementById("event-location-sugge
 const eventLocationStatusEl = document.getElementById("event-location-status");
 const eventLocationSpinnerEl = document.getElementById("event-location-spinner");
 const eventDescriptionEl = document.getElementById("event-description");
+const eventLinkEl = document.getElementById("event-link");
 const eventAttendeesEl = document.getElementById("event-attendees");
 const eventAttendeesStatusEl = document.getElementById("event-attendees-status");
 const eventAttendeesChipsEl = document.getElementById("event-attendees-chips");
 const eventStartEl = document.getElementById("event-start");
 const eventEndEl = document.getElementById("event-end");
+const eventAllDayEl = document.getElementById("event-all-day");
 const eventUseMeetEl = document.getElementById("event-use-meet");
 const eventSendInvitesEl = document.getElementById("event-send-invites");
 const eventSubmitBtn = document.getElementById("event-submit");
@@ -36,6 +39,7 @@ const eventFormStatusEl = document.getElementById("event-form-status");
 const durationBtns = Array.from(
   document.querySelectorAll("#event-form-card .duration-row [data-duration]")
 );
+const durationRowEl = document.querySelector("#event-form-card .duration-row");
 const tabs = Array.from(document.querySelectorAll(".tab"));
 const filterBtns = Array.from(document.querySelectorAll(".filter"));
 
@@ -53,6 +57,7 @@ let selectedLocationInfo = null;
 let calendarFilterId = "all";
 let sortMode = "start-asc";
 let lastEvents = [];
+const CAL_LAST_REFRESH_KEY = "calendarLastRefresh";
 
 function todayLocalDateInput() {
   const d = new Date();
@@ -338,6 +343,7 @@ function resetEventFormAfterSuccess(message) {
   if (eventSummaryEl) eventSummaryEl.value = "";
   if (eventLocationEl) eventLocationEl.value = "";
   if (eventDescriptionEl) eventDescriptionEl.value = "";
+  if (eventLinkEl) eventLinkEl.value = "";
   if (eventUseMeetEl) eventUseMeetEl.checked = false;
   if (eventSendInvitesEl) eventSendInvitesEl.checked = true;
   clearAttendeesField();
@@ -348,6 +354,7 @@ function resetEventFormAfterSuccess(message) {
   setLocationValidityClass(null);
   prefillEventForm();
   setEventFormStatus(message || "Opération réussie.", "ok");
+  toggleEventForm(false);
 }
 
 function buildMeetConferenceData() {
@@ -378,14 +385,31 @@ function prefillFormFromEvent(ev) {
     }
   }
   if (eventDescriptionEl) eventDescriptionEl.value = ev.description || "";
+  if (eventLinkEl) eventLinkEl.value = ev.sourceUrl || "";
+
+  if (eventAllDayEl) {
+    const isAllDay = typeof ev.start === "string" && ev.start.length === 10;
+    eventAllDayEl.checked = isAllDay;
+    applyAllDayMode(isAllDay);
+  }
 
   const start = ev.start ? new Date(ev.start) : null;
   const end = ev.end ? new Date(ev.end) : null;
   if (start && !Number.isNaN(start.getTime()) && eventStartEl) {
-    eventStartEl.value = toDateTimeLocalValue(start);
+    if (eventAllDayEl?.checked) {
+      eventStartEl.value = ev.start;
+    } else {
+      eventStartEl.value = toDateTimeLocalValue(start);
+    }
   }
   if (end && !Number.isNaN(end.getTime()) && eventEndEl) {
-    eventEndEl.value = toDateTimeLocalValue(end);
+    if (eventAllDayEl?.checked) {
+      const endInclusive = new Date(end);
+      endInclusive.setDate(endInclusive.getDate() - 1);
+      eventEndEl.value = toDateOnlyValue(endInclusive);
+    } else {
+      eventEndEl.value = toDateTimeLocalValue(end);
+    }
   }
 
   clearAttendeesField();
@@ -413,6 +437,7 @@ function startEditingEvent(ev) {
 
 function applyDurationFromStart(minutes) {
   if (!eventStartEl || !eventEndEl) return;
+  if (eventAllDayEl?.checked) return;
   const start = parseDateTimeLocal(eventStartEl.value);
   if (!start) return;
   const end = new Date(start);
@@ -430,8 +455,33 @@ function toggleEventForm(forceOpen) {
   }
 }
 
+function applyAllDayMode(isAllDay) {
+  if (!eventStartEl || !eventEndEl) return;
+  if (durationRowEl) durationRowEl.style.display = isAllDay ? "none" : "";
+
+  if (isAllDay) {
+    const start = parseDateTimeLocal(eventStartEl.value) || parseDateOnly(eventStartEl.value);
+    const end = parseDateTimeLocal(eventEndEl.value) || parseDateOnly(eventEndEl.value);
+    if (start) eventStartEl.value = toDateOnlyValue(start);
+    if (end) eventEndEl.value = toDateOnlyValue(end);
+    eventStartEl.type = "date";
+    eventEndEl.type = "date";
+  } else {
+    eventStartEl.type = "datetime-local";
+    eventEndEl.type = "datetime-local";
+    const startDate = parseDateOnly(eventStartEl.value) || new Date();
+    startDate.setHours(9, 0, 0, 0);
+    const endDate = new Date(startDate);
+    endDate.setHours(startDate.getHours() + 1);
+    eventStartEl.value = toDateTimeLocalValue(startDate);
+    eventEndEl.value = toDateTimeLocalValue(endDate);
+  }
+}
+
 function prefillEventForm() {
   if (!eventStartEl || !eventEndEl) return;
+  if (eventAllDayEl) eventAllDayEl.checked = false;
+  applyAllDayMode(false);
   const base = parseDateInput(dateEl.value);
   base.setHours(9, 0, 0, 0);
   const end = new Date(base);
@@ -474,16 +524,29 @@ async function submitCreateEvent() {
     return;
   }
 
-  const start = parseDateTimeLocal(eventStartEl?.value);
-  const end = parseDateTimeLocal(eventEndEl?.value);
-  if (!start || !end || end <= start) {
+  const isAllDay = !!eventAllDayEl?.checked;
+  const start = isAllDay ? parseDateOnly(eventStartEl?.value) : parseDateTimeLocal(eventStartEl?.value);
+  const end = isAllDay ? parseDateOnly(eventEndEl?.value) : parseDateTimeLocal(eventEndEl?.value);
+  if (!start || (!isAllDay && end && end <= start)) {
     setEventFormStatus("Dates invalides.", "error");
     return;
+  }
+  if (isAllDay) {
+    if (!end || end < start) {
+      if (eventEndEl) eventEndEl.value = toDateOnlyValue(start);
+    }
   }
 
   const { attendees, invalid: invalidEmails } = verifyAttendeesField();
   if (invalidEmails.length) {
     setEventFormStatus(`Emails invalides: ${invalidEmails.slice(0, 3).join(", ")}`, "error");
+    return;
+  }
+
+  const linkRaw = normalizeText(eventLinkEl?.value || "");
+  const linkUrl = linkRaw ? normalizeUrl(linkRaw) : "";
+  if (linkRaw && !linkUrl) {
+    setEventFormStatus("Lien invalide (URL).", "error");
     return;
   }
 
@@ -511,15 +574,38 @@ async function submitCreateEvent() {
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const sendUpdates = eventSendInvitesEl?.checked ? "all" : "none";
 
+  let startPayload;
+  let endPayload;
+  let reminders = null;
+  if (isAllDay) {
+    const endDateInclusive = end && end >= start ? end : new Date(start);
+    const endDateExclusive = new Date(endDateInclusive);
+    endDateExclusive.setDate(endDateExclusive.getDate() + 1);
+    startPayload = { date: toDateOnlyValue(start) };
+    endPayload = { date: toDateOnlyValue(endDateExclusive) };
+  } else {
+    startPayload = { dateTime: start.toISOString(), timeZone };
+    if (end) {
+      endPayload = { dateTime: end.toISOString(), timeZone };
+    } else {
+      const reminderEnd = new Date(start);
+      reminderEnd.setMinutes(reminderEnd.getMinutes() + 15);
+      endPayload = { dateTime: reminderEnd.toISOString(), timeZone };
+      reminders = { useDefault: false, overrides: [{ method: "popup", minutes: 0 }] };
+    }
+  }
+
   const payload = {
     summary,
     location: normalizeText(eventLocationEl?.value || ""),
     description: normalizeText(eventDescriptionEl?.value || ""),
-    start: { dateTime: start.toISOString(), timeZone },
-    end: { dateTime: end.toISOString(), timeZone },
+    start: startPayload,
+    end: endPayload,
     attendees,
     useMeet: !!eventUseMeetEl?.checked,
     sendUpdates,
+    ...(reminders ? { reminders } : {}),
+    ...(linkUrl ? { source: { title: "Lien", url: linkUrl } } : {}),
   };
 
   if (editingEvent?.id && editingEvent?.calendarId) {
@@ -533,7 +619,10 @@ async function submitCreateEvent() {
     };
     if (payload.useMeet) {
       patch.conferenceData = buildMeetConferenceData();
+    } else {
+      patch.conferenceData = null;
     }
+    patch.source = linkUrl ? { title: "Lien", url: linkUrl } : null;
     chrome.runtime.sendMessage(
       {
         type: "GCAL_UPDATE_EVENT",
@@ -592,11 +681,39 @@ function parseDateInput(value) {
   return new Date(y, m - 1, d);
 }
 
+function parseDateOnly(value) {
+  if (!value) return null;
+  const [y, m, d] = value.split("-").map((v) => Number.parseInt(v, 10));
+  const date = new Date(y, m - 1, d);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function normalizeUrl(value) {
+  const raw = normalizeText(value || "");
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    return url.toString();
+  } catch (_) {
+    return "";
+  }
+}
+
+function formatLinkLabel(urlValue) {
+  if (!urlValue) return "";
+  try {
+    const url = new URL(urlValue);
+    return `${url.origin}/`;
+  } catch (_) {
+    return "";
+  }
+}
+
 function rangeForView(date, mode) {
   const start = new Date(date);
   const end = new Date(date);
 
-  if (mode === "week") {
+  if (mode === "week" || mode === "agenda") {
     const day = start.getDay();
     const diff = (day + 6) % 7; // monday start
     start.setDate(start.getDate() - diff);
@@ -616,6 +733,29 @@ function setDateInput(date) {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   dateEl.value = `${y}-${m}-${day}`;
+}
+
+function formatShortDateTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString();
+}
+
+function setRefreshStatus(ts) {
+  if (!refreshStatusEl) return;
+  refreshStatusEl.textContent = ts ? `Dernier refresh: ${formatShortDateTime(ts)}` : "";
+}
+
+function updateLastRefresh(ts) {
+  const value = ts || Date.now();
+  chrome.storage.local.set({ [CAL_LAST_REFRESH_KEY]: value });
+  setRefreshStatus(value);
+}
+
+function toDateOnlyValue(date) {
+  if (!(date instanceof Date)) return "";
+  return dateKey(date);
 }
 
 function shiftDate(direction) {
@@ -757,6 +897,120 @@ function formatEventTime(ev) {
   return endStr ? `${startStr} - ${endStr}` : startStr;
 }
 
+function isAllDayEvent(ev) {
+  const start = String(ev.start || "");
+  const end = String(ev.end || "");
+  return start.length === 10 || end.length === 10;
+}
+
+function eventDateForKey(ev) {
+  if (typeof ev.start === "string" && ev.start.length === 10) {
+    return ev.start;
+  }
+  return dateKey(ev.start);
+}
+
+function toEventDateTime(value, fallback) {
+  const dt = value ? new Date(value) : null;
+  if (dt && !Number.isNaN(dt.getTime())) return dt;
+  return fallback;
+}
+
+function minutesSinceStartOfDay(date) {
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function buildTimeAxis() {
+  const axis = document.createElement("div");
+  axis.className = "time-axis";
+  for (let h = 0; h < 24; h += 1) {
+    const label = document.createElement("div");
+    label.className = "time-label";
+    label.textContent = `${String(h).padStart(2, "0")}:00`;
+    axis.appendChild(label);
+  }
+  return axis;
+}
+
+function attachDragToEvent(block, ev, dayDate, gridEl) {
+  if (!block || !ev || !gridEl) return;
+  if (isAllDayEvent(ev)) return;
+  if (!ev.calendarId || !ev.id) return;
+
+  let pointerActive = false;
+  let startPoint = null;
+
+  const onPointerMove = (e) => {
+    if (!pointerActive || !startPoint) return;
+    e.preventDefault();
+  };
+
+  const onPointerUp = (e) => {
+    if (!pointerActive || !startPoint) return;
+    pointerActive = false;
+    block.releasePointerCapture?.(e.pointerId);
+    document.removeEventListener("pointermove", onPointerMove);
+    document.removeEventListener("pointerup", onPointerUp);
+
+    const gridRect = gridEl.getBoundingClientRect();
+    const x = e.clientX - gridRect.left;
+    const y = e.clientY - gridRect.top;
+    if (x < 0 || y < 0) return;
+
+    const dayBase = new Date(dayDate);
+    let targetDate = new Date(dayBase);
+    if (viewMode === "week") {
+      const colWidth = gridRect.width / 7;
+      const dayIndex = Math.min(6, Math.max(0, Math.floor(x / colWidth)));
+      targetDate.setDate(dayBase.getDate() + dayIndex);
+    }
+
+    const minutes = Math.min(1439, Math.max(0, Math.round((y / gridRect.height) * 1440 / 5) * 5));
+    targetDate.setHours(0, 0, 0, 0);
+    targetDate.setMinutes(minutes);
+
+    const startDt = ev.start ? new Date(ev.start) : null;
+    const endDt = ev.end ? new Date(ev.end) : null;
+    let durationMs = 30 * 60 * 1000;
+    if (startDt && endDt && !Number.isNaN(startDt.getTime()) && !Number.isNaN(endDt.getTime())) {
+      durationMs = Math.max(15 * 60 * 1000, endDt.getTime() - startDt.getTime());
+    }
+
+    const newStart = new Date(targetDate);
+    const newEnd = new Date(newStart.getTime() + durationMs);
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const patch = {
+      start: { dateTime: newStart.toISOString(), timeZone },
+      end: { dateTime: newEnd.toISOString(), timeZone },
+    };
+
+    chrome.runtime.sendMessage(
+      {
+        type: "GCAL_UPDATE_EVENT",
+        payload: { calendarId: ev.calendarId, eventId: ev.id, patch, sendUpdates: "none" },
+      },
+      (res) => {
+        if (chrome.runtime.lastError || !res?.ok) {
+          setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
+          return;
+        }
+        setEventFormStatus("Événement déplacé.", "ok");
+        loadEvents();
+        loadNextEvents();
+      }
+    );
+  };
+
+  block.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    pointerActive = true;
+    startPoint = { x: e.clientX, y: e.clientY };
+    block.setPointerCapture?.(e.pointerId);
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
+  });
+}
+
 function getCalendarColor(calendarId) {
   const cal = calendars.find((c) => c.id === calendarId);
   return cal?.backgroundColor || "#2563eb";
@@ -869,7 +1123,9 @@ function passesFilters(ev) {
   }
   const q = normalizeText(searchEl?.value || "").toLowerCase();
   if (q) {
-    const hay = `${ev.summary || ""} ${ev.location || ""} ${ev.calendarSummary || ""}`.toLowerCase();
+    const hay = `${ev.summary || ""} ${ev.location || ""} ${ev.calendarSummary || ""} ${
+      ev.sourceUrl || ""
+    }`.toLowerCase();
     if (!hay.includes(q)) return false;
   }
   if (meetingFilter === "all") return true;
@@ -893,6 +1149,32 @@ function makeEventChip(ev) {
 
   chip.appendChild(title);
   if (meta.textContent) chip.appendChild(meta);
+
+  const locationText = normalizeText(ev.location || "");
+  if (locationText) {
+    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      locationText
+    )}`;
+    const loc = document.createElement("a");
+    loc.className = "event-meta event-location-link";
+    loc.href = mapsUrl;
+    loc.target = "_blank";
+    loc.rel = "noreferrer";
+    loc.textContent = `📍 ${locationText}`;
+    loc.addEventListener("click", (e) => e.stopPropagation());
+    chip.appendChild(loc);
+  }
+
+  if (ev.sourceUrl) {
+    const link = document.createElement("a");
+    link.className = "event-join";
+    link.href = ev.sourceUrl;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = formatLinkLabel(ev.sourceUrl) || "Lien";
+    link.addEventListener("click", (e) => e.stopPropagation());
+    chip.appendChild(link);
+  }
 
   if (Array.isArray(ev.tags) && ev.tags.length) {
     const tags = document.createElement("div");
@@ -979,62 +1261,227 @@ function makeEventChip(ev) {
 
 function renderEvents(items) {
   eventsEl.innerHTML = "";
+  const filtered = sortEvents((items || []).filter(passesFilters));
   if (!items || items.length === 0) {
     eventsStatusEl.textContent = "Aucun evenement dans cette periode.";
-    return;
-  }
-  const filtered = sortEvents(items.filter(passesFilters));
-  if (filtered.length === 0) {
+  } else if (filtered.length === 0) {
     eventsStatusEl.textContent = "Aucun evenement avec ces filtres.";
-    return;
+  } else {
+    eventsStatusEl.textContent = "";
   }
-  eventsStatusEl.textContent = "";
 
   const groups = new Map();
   filtered.forEach((ev) => {
-    const key = getEventDateKey(ev);
+    const key = eventDateForKey(ev);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(ev);
   });
 
   const baseDate = parseDateInput(dateEl.value);
+  if (viewMode === "agenda") {
+    const list = document.createElement("div");
+    list.className = "agenda-list";
+    let lastDateKey = "";
+    filtered.forEach((ev) => {
+      const key = eventDateForKey(ev);
+      if (key !== lastDateKey) {
+        lastDateKey = key;
+        const dateLabel = document.createElement("div");
+        dateLabel.className = "agenda-date";
+        const dateObj = new Date(key);
+        dateLabel.textContent = dateObj.toLocaleDateString(undefined, {
+          weekday: "long",
+          day: "numeric",
+          month: "short",
+        });
+        list.appendChild(dateLabel);
+      }
+
+      const row = document.createElement("div");
+      row.className = "agenda-item";
+      row.tabIndex = 0;
+
+      const dot = document.createElement("span");
+      dot.className = "agenda-dot";
+      dot.style.background = getCalendarColor(ev.calendarId);
+      row.appendChild(dot);
+
+      const content = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "agenda-title";
+      title.textContent = normalizeText(ev.summary || "Evenement");
+      const meta = document.createElement("div");
+      meta.className = "agenda-meta";
+      meta.textContent = isAllDayEvent(ev) ? "Toute la journée" : formatEventTime(ev);
+      content.appendChild(title);
+      content.appendChild(meta);
+      row.appendChild(content);
+
+      const openUrl = ev.meetingLink || ev.htmlLink || "";
+      if (openUrl) {
+        row.addEventListener("click", () => window.open(openUrl, "_blank", "noreferrer"));
+        row.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") window.open(openUrl, "_blank", "noreferrer");
+        });
+      }
+
+      list.appendChild(row);
+    });
+    eventsEl.appendChild(list);
+    return;
+  }
+
   if (viewMode === "day") {
     const key = dateKey(baseDate);
     const dayEvents = groups.get(key) || [];
-    dayEvents.forEach((ev) => eventsEl.appendChild(makeEventChip(ev)));
+    const allDay = dayEvents.filter(isAllDayEvent);
+    const timed = dayEvents.filter((ev) => !isAllDayEvent(ev));
+
+    const allDayRow = document.createElement("div");
+    allDayRow.className = "all-day-row";
+    const allDayLabel = document.createElement("div");
+    allDayLabel.className = "all-day-label";
+    allDayLabel.textContent = "Toute la journée";
+    const allDayList = document.createElement("div");
+    allDayList.className = "all-day-list";
+    allDay.forEach((ev) => {
+      const chip = makeEventChip(ev);
+      chip.classList.add("all-day-chip");
+      allDayList.appendChild(chip);
+    });
+    allDayRow.appendChild(allDayLabel);
+    allDayRow.appendChild(allDayList);
+    eventsEl.appendChild(allDayRow);
+
+    const timeGrid = document.createElement("div");
+    timeGrid.className = "time-grid";
+    timeGrid.appendChild(buildTimeAxis());
+
+    const dayGrid = document.createElement("div");
+    dayGrid.className = "day-grid";
+    const daySlots = document.createElement("div");
+    daySlots.className = "day-slots";
+    for (let i = 0; i < 24; i += 1) {
+      const slot = document.createElement("div");
+      slot.className = "day-slot";
+      daySlots.appendChild(slot);
+    }
+    const dayEventsLayer = document.createElement("div");
+    dayEventsLayer.className = "day-events-layer";
+
+    timed.forEach((ev) => {
+      const start = toEventDateTime(ev.start, new Date(baseDate));
+      const endFallback = new Date(start);
+      endFallback.setMinutes(endFallback.getMinutes() + 30);
+      const end = toEventDateTime(ev.end, endFallback);
+      const startMin = minutesSinceStartOfDay(start);
+      const endMin = Math.max(startMin + 15, minutesSinceStartOfDay(end));
+      const block = makeEventChip(ev);
+      block.classList.add("event-block");
+      block.style.top = `calc(var(--hour-height) * ${startMin / 60})`;
+      block.style.height = `calc(var(--hour-height) * ${Math.max(15, endMin - startMin) / 60})`;
+      block.style.borderLeftColor = getCalendarColor(ev.calendarId);
+      attachDragToEvent(block, ev, baseDate, dayGrid);
+      dayEventsLayer.appendChild(block);
+    });
+
+    dayGrid.appendChild(daySlots);
+    dayGrid.appendChild(dayEventsLayer);
+    timeGrid.appendChild(dayGrid);
+    eventsEl.appendChild(timeGrid);
     return;
   }
 
   if (viewMode === "week") {
     const start = weekStart(baseDate);
     const header = document.createElement("div");
-    header.className = "calendar-week";
+    header.className = "week-header";
+    const headerSpacer = document.createElement("div");
+    headerSpacer.className = "time-spacer";
+    header.appendChild(headerSpacer);
     for (let i = 0; i < 7; i += 1) {
       const d = new Date(start);
       d.setDate(start.getDate() + i);
       const label = document.createElement("div");
       label.className = "day-header";
       label.textContent = d.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+      if (isTodayKey(dateKey(d))) label.classList.add("today");
       header.appendChild(label);
     }
     eventsEl.appendChild(header);
 
-    const grid = document.createElement("div");
-    grid.className = "calendar-week";
+    const allDayRow = document.createElement("div");
+    allDayRow.className = "week-all-day";
+    const allDayLabel = document.createElement("div");
+    allDayLabel.className = "all-day-label";
+    allDayLabel.textContent = "Toute la journée";
+    allDayRow.appendChild(allDayLabel);
+
     for (let i = 0; i < 7; i += 1) {
       const d = new Date(start);
       d.setDate(start.getDate() + i);
-      const cell = document.createElement("div");
-      cell.className = "day-cell";
       const key = dateKey(d);
-      if (isTodayKey(key)) {
-        cell.classList.add("today");
-      }
-      const dayEvents = groups.get(key) || [];
-      dayEvents.forEach((ev) => cell.appendChild(makeEventChip(ev)));
-      grid.appendChild(cell);
+      const cell = document.createElement("div");
+      cell.className = "all-day-list";
+      const dayEvents = (groups.get(key) || []).filter(isAllDayEvent);
+      dayEvents.forEach((ev) => {
+        const chip = makeEventChip(ev);
+        chip.classList.add("all-day-chip");
+        cell.appendChild(chip);
+      });
+      allDayRow.appendChild(cell);
     }
-    eventsEl.appendChild(grid);
+    eventsEl.appendChild(allDayRow);
+
+    const timeGrid = document.createElement("div");
+    timeGrid.className = "week-time-grid";
+    timeGrid.appendChild(buildTimeAxis());
+
+    const weekDays = document.createElement("div");
+    weekDays.className = "week-days";
+
+    for (let i = 0; i < 7; i += 1) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const key = dateKey(d);
+      const col = document.createElement("div");
+      col.className = "day-grid";
+      if (isTodayKey(key)) col.classList.add("today");
+
+      const slots = document.createElement("div");
+      slots.className = "day-slots";
+      for (let h = 0; h < 24; h += 1) {
+        const slot = document.createElement("div");
+        slot.className = "day-slot";
+        slots.appendChild(slot);
+      }
+
+      const layer = document.createElement("div");
+      layer.className = "day-events-layer";
+      const timed = (groups.get(key) || []).filter((ev) => !isAllDayEvent(ev));
+      timed.forEach((ev) => {
+        const startDt = toEventDateTime(ev.start, new Date(d));
+        const endFallback = new Date(startDt);
+        endFallback.setMinutes(endFallback.getMinutes() + 30);
+        const endDt = toEventDateTime(ev.end, endFallback);
+        const startMin = minutesSinceStartOfDay(startDt);
+        const endMin = Math.max(startMin + 15, minutesSinceStartOfDay(endDt));
+        const block = makeEventChip(ev);
+        block.classList.add("event-block");
+        block.style.top = `calc(var(--hour-height) * ${startMin / 60})`;
+        block.style.height = `calc(var(--hour-height) * ${Math.max(15, endMin - startMin) / 60})`;
+        block.style.borderLeftColor = getCalendarColor(ev.calendarId);
+        attachDragToEvent(block, ev, start, weekDays);
+        layer.appendChild(block);
+      });
+
+      col.appendChild(slots);
+      col.appendChild(layer);
+      weekDays.appendChild(col);
+    }
+
+    timeGrid.appendChild(weekDays);
+    eventsEl.appendChild(timeGrid);
     return;
   }
 
@@ -1073,13 +1520,15 @@ function renderEvents(items) {
     if (d.getMonth() !== month) number.style.opacity = "0.4";
     cell.appendChild(number);
     const dayEvents = groups.get(key) || [];
-    dayEvents.slice(0, 3).forEach((ev) => cell.appendChild(makeEventChip(ev)));
-    if (dayEvents.length > 3) {
-      const more = document.createElement("div");
-      more.className = "event-meta";
-      more.textContent = `+${dayEvents.length - 3}`;
-      cell.appendChild(more);
-    }
+    const list = document.createElement("div");
+    list.className = "day-events-list";
+    dayEvents.forEach((ev) => {
+      const item = document.createElement("div");
+      item.className = "month-event";
+      item.textContent = normalizeText(ev.summary || "Evenement");
+      list.appendChild(item);
+    });
+    cell.appendChild(list);
     grid.appendChild(cell);
   });
   eventsEl.appendChild(grid);
@@ -1179,20 +1628,21 @@ function loadEvents() {
           lastEvents = [];
           return;
         }
-        if (!res?.ok) {
-          const err = res?.error || "inconnue";
-          eventsStatusEl.textContent =
-            err === "AUTH_REQUIRED"
-              ? "Non connecte. Connecte Google dans Options."
-              : `Erreur: ${err}`;
-          lastEvents = [];
-          return;
-        }
-        lastEvents = res.events || [];
-        renderEvents(lastEvents);
+      if (!res?.ok) {
+        const err = res?.error || "inconnue";
+        eventsStatusEl.textContent =
+          err === "AUTH_REQUIRED"
+            ? "Non connecte. Connecte Google dans Options."
+            : `Erreur: ${err}`;
+        lastEvents = [];
+        return;
       }
-    );
-  }, 150);
+      lastEvents = res.events || [];
+      updateLastRefresh(Date.now());
+      renderEvents(lastEvents);
+    }
+  );
+}, 150);
 }
 
 function manualRefresh() {
@@ -1233,6 +1683,10 @@ if (calendarFilterEl) {
     loadNextEvents();
   });
 }
+
+chrome.storage.local.get([CAL_LAST_REFRESH_KEY], (data) => {
+  setRefreshStatus(data[CAL_LAST_REFRESH_KEY]);
+});
 
 if (exportEventsBtn) {
   exportEventsBtn.addEventListener("click", exportEvents);
@@ -1289,16 +1743,39 @@ if (eventSubmitBtn) {
   eventSubmitBtn.addEventListener("click", submitCreateEvent);
 }
 
-if (eventStartEl) {
-  eventStartEl.addEventListener("change", () => {
+  if (eventStartEl) {
+    eventStartEl.addEventListener("change", () => {
+      if (eventAllDayEl?.checked) {
+        const start = parseDateOnly(eventStartEl.value);
+      if (start && eventEndEl) {
+        const end = parseDateOnly(eventEndEl.value) || new Date(start);
+        if (end <= start) {
+          const nextDay = new Date(start);
+          nextDay.setDate(nextDay.getDate() + 1);
+          eventEndEl.value = toDateOnlyValue(nextDay);
+        }
+      }
+      return;
+    }
     const start = parseDateTimeLocal(eventStartEl.value);
     const end = parseDateTimeLocal(eventEndEl?.value);
     if (!start) return;
-    if (!end || end <= start) {
-      applyDurationFromStart(60);
-    }
+    if (!end) return;
+      if (end <= start) {
+        applyDurationFromStart(60);
+      }
+    });
+  }
+
+if (eventEndEl) {
+}
+
+if (eventAllDayEl) {
+  eventAllDayEl.addEventListener("change", () => {
+    applyAllDayMode(eventAllDayEl.checked);
   });
 }
+
 
 durationBtns.forEach((btn) => {
   btn.addEventListener("click", () => {

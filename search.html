@@ -45,6 +45,28 @@
         background: rgba(15, 23, 42, 0.9);
         box-shadow: 0 12px 28px rgba(2, 6, 23, 0.45);
       }
+      .settings-btn {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        width: 26px;
+        height: 26px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.5);
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        font-size: 13px;
+        z-index: 6;
+      }
+      .settings-btn:hover {
+        border-color: rgba(56, 189, 248, 0.35);
+        color: var(--text);
+        background: rgba(15, 23, 42, 0.75);
+      }
       .topnav a {
         display: inline-flex;
         align-items: center;
@@ -151,10 +173,11 @@
     <nav class="topnav">
       <a href="home.html">Dashboard</a>
       <a href="calendar.html">Calendrier</a>
+      <a href="stage.html">Stages</a>
       <a href="yahoo.html">Yahoo</a>
       <a href="search.html">Recherche</a>
-      <a href="options.html">Options</a>
     </nav>
+    <a class="settings-btn" href="options.html" aria-label="Options">⚙️</a>
     <div id="market-strip" class="market-strip"></div>
     <header>
       <div>

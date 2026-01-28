@@ -47,6 +47,28 @@
         background: rgba(15, 23, 42, 0.9);
         box-shadow: 0 12px 28px rgba(2, 6, 23, 0.45);
       }
+      .settings-btn {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        width: 26px;
+        height: 26px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.5);
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        font-size: 13px;
+        z-index: 6;
+      }
+      .settings-btn:hover {
+        border-color: rgba(56, 189, 248, 0.35);
+        color: var(--text);
+        background: rgba(15, 23, 42, 0.75);
+      }
       .topnav a {
         display: inline-flex;
         align-items: center;
@@ -89,14 +111,155 @@
         gap: 8px;
         align-items: center;
       }
+      .refresh-status {
+        font-size: 11px;
+        color: var(--muted);
+        margin-left: 6px;
+      }
       .nav { display: inline-flex; gap: 6px; }
       .event-controls {
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
         align-items: center;
-        margin: 6px 0 10px;
+        margin: 0;
         justify-content: flex-end;
+      }
+      .event-controls .btn.secondary {
+        padding: 6px 12px;
+        border-radius: 999px;
+        height: 34px;
+        line-height: 1;
+        background: rgba(15, 23, 42, 0.75);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        color: var(--text);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+      .event-controls .btn.secondary:hover {
+        border-color: rgba(56, 189, 248, 0.5);
+        box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+      }
+      .event-controls input[type="date"] {
+        height: 34px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.75);
+      }
+      :root {
+        --hour-height: 48px;
+      }
+      .time-grid {
+        display: grid;
+        grid-template-columns: 60px 1fr;
+        gap: 10px;
+        align-items: start;
+      }
+      .week-time-grid {
+        display: grid;
+        grid-template-columns: 60px 1fr;
+        gap: 10px;
+      }
+      .time-axis {
+        display: grid;
+        grid-template-rows: repeat(24, var(--hour-height));
+        color: var(--muted);
+        font-size: 11px;
+        padding-top: 4px;
+      }
+      .time-label {
+        display: flex;
+        align-items: flex-start;
+        justify-content: flex-end;
+        padding-right: 8px;
+      }
+      .day-grid {
+        position: relative;
+        border-left: 1px solid var(--border);
+        min-height: calc(var(--hour-height) * 24);
+      }
+      .week-days {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 0;
+      }
+      .day-slots {
+        display: grid;
+        grid-template-rows: repeat(24, var(--hour-height));
+      }
+      .day-slot {
+        border-top: 1px dashed rgba(148, 163, 184, 0.15);
+      }
+      .day-events-layer {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .event-block {
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        pointer-events: auto;
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-left-width: 3px;
+        border-radius: 10px;
+        padding: 6px 8px;
+        overflow: hidden;
+      }
+      .event-block .event-actions {
+        margin-top: 4px;
+      }
+      .all-day-row {
+        display: grid;
+        grid-template-columns: 60px 1fr;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .week-all-day {
+        display: grid;
+        grid-template-columns: 60px repeat(7, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .all-day-label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding-top: 6px;
+      }
+      .all-day-list {
+        display: grid;
+        gap: 6px;
+      }
+      .all-day-chip {
+        padding: 6px 8px;
+        font-size: 12px;
+      }
+      .week-header {
+        display: grid;
+        grid-template-columns: 60px repeat(7, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .time-spacer {
+        height: 1px;
+      }
+      .week-header .day-header {
+        text-transform: capitalize;
+      }
+      .card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      .card-header h3 {
+        margin: 0;
+        line-height: 1;
       }
       .filters {
         display: flex;
@@ -104,6 +267,43 @@
         align-items: center;
         flex-wrap: wrap;
         margin-bottom: 12px;
+      }
+      .agenda-list {
+        display: grid;
+        gap: 10px;
+      }
+      .agenda-date {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-top: 6px;
+      }
+      .agenda-item {
+        display: grid;
+        grid-template-columns: 10px 1fr;
+        gap: 10px;
+        padding: 8px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        cursor: pointer;
+      }
+      .agenda-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        margin-top: 6px;
+        background: var(--accent);
+      }
+      .agenda-title {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .agenda-meta {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 2px;
       }
       .filters input[type="text"] {
         flex: 1 1 240px;
@@ -207,6 +407,10 @@
         display: grid;
         gap: 8px;
       }
+      .datetime-row {
+        display: grid;
+        gap: 12px;
+      }
       .form-grid.cols-2 {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
@@ -241,24 +445,47 @@
         transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
       }
+      #event-form-card input[type="date"] {
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.85), rgba(11, 19, 36, 0.95));
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        color: var(--text);
+        padding: 11px 13px;
+        border-radius: 14px;
+        width: 100%;
+        min-height: 44px;
+        font-size: 14px;
+        font-weight: 600;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+      }
       #event-form-card input[type="text"]::placeholder,
       #event-form-card input[type="datetime-local"]::placeholder {
         color: rgba(148, 163, 184, 0.7);
         font-weight: 500;
       }
       #event-form-card input[type="text"]:hover,
-      #event-form-card input[type="datetime-local"]:hover {
+      #event-form-card input[type="datetime-local"]:hover,
+      #event-form-card input[type="date"]:hover {
         border-color: rgba(56, 189, 248, 0.45);
         background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(11, 19, 36, 0.98));
       }
       #event-form-card input[type="text"]:focus-visible,
-      #event-form-card input[type="datetime-local"]:focus-visible {
+      #event-form-card input[type="datetime-local"]:focus-visible,
+      #event-form-card input[type="date"]:focus-visible {
         outline: none;
         border-color: rgba(56, 189, 248, 0.85);
         box-shadow:
           0 0 0 3px rgba(56, 189, 248, 0.28),
           0 10px 24px rgba(14, 165, 233, 0.18);
         background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(11, 19, 36, 1));
+      }
+      .all-day-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
       }
       #event-form-card input.attendees-valid {
         border-color: rgba(34, 197, 94, 0.75);
@@ -499,6 +726,7 @@
         min-height: 120px;
         display: grid;
         gap: 6px;
+        grid-template-rows: auto 1fr;
       }
       .day-cell.today {
         border-color: rgba(56, 189, 248, 0.8);
@@ -521,6 +749,24 @@
         background: rgba(56, 189, 248, 0.2);
         border: 1px solid rgba(56, 189, 248, 0.6);
       }
+      .day-events-list {
+        display: grid;
+        gap: 4px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+      .month-event {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text);
+        padding: 4px 6px;
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.65);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       .event-chip {
         background: var(--surface);
         border: 1px solid var(--border);
@@ -533,6 +779,16 @@
       .event-title { font-weight: 600; font-size: 12px; }
       .event-meta { font-size: 11px; color: var(--muted); }
       .event a { color: var(--accent); text-decoration: none; font-size: 11px; }
+      .event-location-link {
+        color: var(--accent);
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .event-location-link:hover {
+        text-decoration: underline;
+      }
       .event-join {
         display: inline-flex;
         align-items: center;
@@ -572,10 +828,11 @@
     <nav class="topnav">
       <a href="home.html">Dashboard</a>
       <a href="calendar.html">Calendrier</a>
+      <a href="stage.html">Stages</a>
       <a href="yahoo.html">Yahoo</a>
       <a href="search.html">Recherche</a>
-      <a href="options.html">Options</a>
     </nav>
+    <a class="settings-btn" href="options.html" aria-label="Options">⚙️</a>
     <div id="market-strip" class="market-strip"></div>
     <header>
       <div>
@@ -587,10 +844,12 @@
           <button class="tab active" data-view="day" role="tab" aria-selected="true">Jour</button>
           <button class="tab" data-view="week" role="tab" aria-selected="false">Semaine</button>
           <button class="tab" data-view="month" role="tab" aria-selected="false">Mois</button>
+          <button class="tab" data-view="agenda" role="tab" aria-selected="false">Agenda</button>
         </div>
         <div class="controls-right">
           <button class="btn secondary" id="create-event-btn" aria-label="Créer un événement">Créer un événement</button>
           <button class="btn" id="refresh" aria-label="Actualiser">Actualiser</button>
+          <span class="refresh-status" id="refresh-status"></span>
         </div>
       </div>
     </header>
@@ -659,10 +918,16 @@
           </label>
           <input id="event-description" type="text" placeholder="Notes, ordre du jour..." autocomplete="off" />
         </div>
+        <div>
+          <label for="event-link" class="field-label">
+            <span>Lien</span>
+          </label>
+          <input id="event-link" type="text" placeholder="https://exemple.com" autocomplete="off" />
+        </div>
       </div>
 
       <div class="form-section">
-        <div class="form-grid cols-2">
+        <div class="form-grid cols-2 datetime-row">
           <div>
             <label for="event-start" class="field-label">
               <span>Début</span>
@@ -674,8 +939,13 @@
               <span>Fin</span>
             </label>
             <input id="event-end" type="datetime-local" />
+            <p class="note">Si la fin est vide, l’événement devient un rappel.</p>
           </div>
         </div>
+        <label class="all-day-row">
+          <input type="checkbox" id="event-all-day" />
+          Toute la journée
+        </label>
         <div class="duration-row" aria-label="Durée rapide">
           <button class="btn secondary tiny" type="button" data-duration="30">+30 min</button>
           <button class="btn secondary tiny" type="button" data-duration="45">+45 min</button>
@@ -725,14 +995,16 @@
       </div>
       <div style="display: grid; gap: 12px;">
         <section class="card">
-          <h3>Evenements</h3>
-          <div class="event-controls">
-            <div class="nav">
-              <button class="btn secondary" id="prev">Precedent</button>
-              <button class="btn secondary" id="next">Suivant</button>
+          <div class="card-header">
+            <h3>Evenements</h3>
+            <div class="event-controls">
+              <div class="nav">
+                <button class="btn secondary" id="prev">Precedent</button>
+                <button class="btn secondary" id="next">Suivant</button>
+              </div>
+              <button class="btn secondary" id="today">Aujourd'hui</button>
+              <input type="date" id="date" aria-label="Date" />
             </div>
-            <button class="btn secondary" id="today">Aujourd'hui</button>
-            <input type="date" id="date" aria-label="Date" />
           </div>
           <p class="note" id="events-status">Aucun evenement charge.</p>
           <div class="calendar-view" id="calendar-view"></div>

@@ -43,6 +43,28 @@
         background: rgba(15, 23, 42, 0.9);
         box-shadow: 0 12px 28px rgba(2, 6, 23, 0.45);
       }
+      .settings-btn {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        width: 26px;
+        height: 26px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.5);
+        color: var(--muted);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        font-size: 13px;
+        z-index: 6;
+      }
+      .settings-btn:hover {
+        border-color: rgba(56, 189, 248, 0.35);
+        color: var(--text);
+        background: rgba(15, 23, 42, 0.75);
+      }
       .topnav a {
         display: inline-flex;
         align-items: center;
@@ -87,6 +109,14 @@
         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
         gap: 16px;
       }
+      .checkline {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 8px;
+      }
       .card {
         background: linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(11, 19, 36, 0.95));
         border: 1px solid rgba(148, 163, 184, 0.2);
@@ -122,6 +152,57 @@
         color: var(--text);
         font-size: 13px;
         font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+      }
+      .diag-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      .diag-table th,
+      .diag-table td {
+        text-align: left;
+        padding: 8px 6px;
+        border-bottom: 1px solid var(--border);
+      }
+      .diag-table th {
+        color: var(--muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 11px;
+      }
+      .diag-empty {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .chip-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.9);
+        font-size: 12px;
+        color: var(--text);
+      }
+      .chip button {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+        padding: 0;
+      }
+      .chip button:hover {
+        color: var(--accent);
       }
       button {
         border: none;
@@ -173,10 +254,11 @@
       <nav class="topnav">
         <a href="home.html">Dashboard</a>
         <a href="calendar.html">Calendrier</a>
+        <a href="stage.html">Stages</a>
         <a href="yahoo.html">Yahoo</a>
         <a href="search.html">Recherche</a>
-        <a href="options.html">Options</a>
       </nav>
+      <a class="settings-btn" href="options.html" aria-label="Options">⚙️</a>
       <div id="market-strip" class="market-strip"></div>
       <header>
         <div>
@@ -213,6 +295,52 @@
             <button id="check" class="secondary">Verifier connexion + charger</button>
           </div>
           <p id="status" class="note"></p>
+        </section>
+
+        <section class="card">
+          <h3 class="section-title">URL Blocker</h3>
+          <p class="note">Blocage toujours actif. Une URL ou domaine par ligne.</p>
+          <input id="url-blocker-input" placeholder="ex: youtube.com" autocomplete="off" />
+          <div class="chip-list" id="url-blocker-list"></div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="url-blocker-save">Enregistrer liste</button>
+          </div>
+          <p class="note" id="url-blocker-status"></p>
+        </section>
+
+        <section class="card">
+          <h3 class="section-title">Dashboard Widgets</h3>
+          <p class="note">Active ou masque les blocs du dashboard.</p>
+          <label class="checkline"><input type="checkbox" id="widget-events" /> Prochains événements</label>
+          <label class="checkline"><input type="checkbox" id="widget-add" /> Ajouter à Notion</label>
+          <label class="checkline"><input type="checkbox" id="widget-focus" /> Focus du jour</label>
+          <label class="checkline"><input type="checkbox" id="widget-todo" /> Stages à faire</label>
+          <label class="checkline"><input type="checkbox" id="widget-news" /> News finance</label>
+          <label class="checkline"><input type="checkbox" id="widget-timeline" /> Timeline priorités</label>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="widget-save">Enregistrer widgets</button>
+          </div>
+          <p class="note" id="widget-status"></p>
+        </section>
+
+        <section class="card">
+          <h3 class="section-title">Mode Focus</h3>
+          <p class="note">Active le blocage + pomodoro.</p>
+          <label class="checkline"><input type="checkbox" id="focus-enabled" /> Activer mode focus</label>
+          <div class="grid" style="margin-top: 10px;">
+            <div>
+              <label for="pomodoro-work">Pomodoro (minutes)</label>
+              <input id="pomodoro-work" type="number" min="5" max="120" />
+            </div>
+            <div>
+              <label for="pomodoro-break">Pause (minutes)</label>
+              <input id="pomodoro-break" type="number" min="1" max="60" />
+            </div>
+          </div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="focus-save">Enregistrer focus</button>
+          </div>
+          <p class="note" id="focus-status"></p>
         </section>
 
         <section class="card">
@@ -384,7 +512,16 @@
           </div>
           <div style="margin-top: 10px;">
             <label>Erreurs récentes</label>
-            <pre id="diag-errors">Aucune erreur.</pre>
+            <table class="diag-table">
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Fréquence</th>
+                  <th>Action recommandée</th>
+                </tr>
+              </thead>
+              <tbody id="diag-errors"></tbody>
+            </table>
           </div>
         </section>
       </div>

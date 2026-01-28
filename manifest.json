@@ -6,13 +6,18 @@
   "permissions": [
     "activeTab",
     "alarms",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "declarativeNetRequestWithHostAccess",
     "identity",
     "notifications",
+    "sidePanel",
     "storage",
     "scripting",
     "tabs"
   ],
   "host_permissions": [
+    "<all_urls>",
     "https://api.notion.com/*",
     "https://www.googleapis.com/calendar/*",
     "https://oauth2.googleapis.com/*",
@@ -21,7 +26,8 @@
     "https://query1.finance.yahoo.com/*",
     "https://data-api.ecb.europa.eu/*",
     "https://api.webstat.banque-france.fr/*",
-    "https://webstat.banque-france.fr/*"
+    "https://webstat.banque-france.fr/*",
+    "https://essec.jobteaser.com/*"
   ],
   "oauth2": {
     "client_id": "608348086080-dp8647muci5st4em00pdgvrba75jq3db.apps.googleusercontent.com",
@@ -32,12 +38,14 @@
   },
   "action": {
     "default_title": "Stage → Notion",
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png",
       "128": "icons/icon-128.png"
     }
+  },
+  "side_panel": {
+    "default_path": "home.html"
   },
   "background": {
     "service_worker": "background.js"

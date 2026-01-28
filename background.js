@@ -32,6 +32,33 @@ const DIAG_ERRORS_KEY = "diagErrors";
 const DIAG_ERRORS_LIMIT = 25;
 const DIAG_SYNC_KEY = "diagSyncStats";
 const DIAG_LAST_SYNC_KEY = "diagLastSyncAt";
+const URL_BLOCKER_RULES_KEY = "urlBlockerRules";
+const URL_BLOCKER_ENABLED_KEY = "urlBlockerEnabled";
+const URL_BLOCKER_BASE_ID = 9000;
+
+try {
+  if (chrome?.sidePanel?.setPanelBehavior) {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  }
+} catch (_) {
+  // Ignore if side panel API is unavailable.
+}
+
+try {
+  if (chrome?.action?.onClicked) {
+    chrome.action.onClicked.addListener((tab) => {
+      if (chrome?.sidePanel?.open && tab?.id != null) {
+        chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
+        return;
+      }
+      if (chrome?.tabs?.create) {
+        chrome.tabs.create({ url: "calendar.html" });
+      }
+    });
+  }
+} catch (_) {
+  // Ignore if side panel API is unavailable.
+}
 
 function makeError(message, code, status, meta) {
   const err = new Error(message);
@@ -274,6 +301,144 @@ function todayISODate() {
 function normalizeText(input) {
   const text = (input ?? "").toString();
   return text.normalize("NFC").trim();
+}
+
+function normalizeToUrlFilter(input) {
+  const s = normalizeText(input);
+  if (!s) return null;
+
+  if (s.startsWith("||")) return s;
+
+  try {
+    const u = new URL(s);
+    const path = u.pathname || "/";
+    const query = u.search || "";
+    if (path === "/" && !query) return `||${u.host}^`;
+    return `||${u.host}${path}${query}`;
+  } catch (_) {
+    const parts = s.split("/");
+    const host = parts[0];
+    const rest = parts.slice(1).join("/");
+    if (!rest) return `||${host}^`;
+    return `||${s}`;
+  }
+}
+
+function normalizeUrlBlockerRules(rawRules) {
+  const normalized = [];
+  const seen = new Set();
+  for (const r of rawRules || []) {
+    const f = normalizeToUrlFilter(r);
+    if (!f || seen.has(f)) continue;
+    seen.add(f);
+    normalized.push(f);
+  }
+  return normalized;
+}
+
+function isDomainMatch(host, domain) {
+  if (!host || !domain) return false;
+  const h = host.toLowerCase();
+  const d = domain.toLowerCase();
+  return h === d || h.endsWith(`.${d}`);
+}
+
+function shouldBlockUrl(url, urlFilters) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+
+  const host = u.hostname;
+  const path = `${u.pathname}${u.search}`;
+
+  for (const filter of urlFilters) {
+    if (!filter || typeof filter !== "string") continue;
+    let f = filter;
+    if (f.startsWith("||")) f = f.slice(2);
+
+    if (f.endsWith("^")) {
+      const domain = f.slice(0, -1);
+      if (isDomainMatch(host, domain)) return true;
+      continue;
+    }
+
+    const slashIndex = f.indexOf("/");
+    if (slashIndex === -1) {
+      if (isDomainMatch(host, f)) return true;
+      continue;
+    }
+
+    const domain = f.slice(0, slashIndex);
+    const pathFilter = f.slice(slashIndex);
+    if (isDomainMatch(host, domain) && path.startsWith(pathFilter)) return true;
+  }
+
+  return false;
+}
+
+async function applyUrlBlockerRules() {
+  const { [URL_BLOCKER_ENABLED_KEY]: enabled = true, [URL_BLOCKER_RULES_KEY]: rawRules = [] } =
+    await chrome.storage.local.get([URL_BLOCKER_ENABLED_KEY, URL_BLOCKER_RULES_KEY]);
+
+  const normalized = normalizeUrlBlockerRules(rawRules);
+
+  const existing = await chrome.declarativeNetRequest.getDynamicRules();
+  const removeRuleIds = existing
+    .filter((r) => r.id >= URL_BLOCKER_BASE_ID && r.id < URL_BLOCKER_BASE_ID + 10000)
+    .map((r) => r.id);
+
+  if (!enabled) {
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules: [] });
+    return;
+  }
+
+  const addRules = normalized.map((urlFilter, i) => ({
+    id: URL_BLOCKER_BASE_ID + i,
+    priority: 1,
+    action: { type: "block" },
+    condition: { urlFilter },
+  }));
+
+  await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules });
+}
+
+async function ensureUrlBlockerDefaults() {
+  const state = await chrome.storage.local.get([URL_BLOCKER_ENABLED_KEY, URL_BLOCKER_RULES_KEY]);
+  if (state[URL_BLOCKER_ENABLED_KEY] !== true) {
+    await chrome.storage.local.set({ [URL_BLOCKER_ENABLED_KEY]: true });
+  }
+  if (!Array.isArray(state[URL_BLOCKER_RULES_KEY])) {
+    await chrome.storage.local.set({ [URL_BLOCKER_RULES_KEY]: [] });
+  }
+}
+
+async function checkAllTabsForBlocker() {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch (_) {
+    return;
+  }
+
+  const { [URL_BLOCKER_RULES_KEY]: rawRules = [], [URL_BLOCKER_ENABLED_KEY]: enabled = true } =
+    await chrome.storage.local.get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY]);
+  if (!enabled) return;
+  const filters = normalizeUrlBlockerRules(rawRules);
+  if (!filters.length) return;
+
+  for (const tab of tabs) {
+    if (tab.id == null || !tab.url) continue;
+    if (!shouldBlockUrl(tab.url, filters)) continue;
+    try {
+      await chrome.tabs.remove(tab.id);
+    } catch (_) {
+      // ignore
+    }
+  }
 }
 
 function toIsoStringLocal(date) {
@@ -667,7 +832,7 @@ async function createCalendarEvent(calendarId, event) {
 async function updateCalendarEvent(calendarId, eventId, patch, sendUpdates = "all") {
   const params = new URLSearchParams();
   params.set("sendUpdates", sendUpdates);
-  if (patch?.conferenceData) {
+  if (patch && Object.prototype.hasOwnProperty.call(patch, "conferenceData")) {
     params.set("conferenceDataVersion", "1");
   }
   const path = `calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(
@@ -1044,6 +1209,7 @@ async function loadEventsRange(timeMin, timeMax, calendarIds, interactive) {
         calendarId: bucket.calendarId,
         calendarSummary: bucket.calendarSummary,
         htmlLink: ev.htmlLink || "",
+        sourceUrl: ev.source?.url || "",
         description: ev.description || "",
         attendees: (ev.attendees || [])
           .map((a) => a?.email)
@@ -1474,6 +1640,144 @@ async function listTodoStages() {
   };
 }
 
+function normalizeStatus(value) {
+  return normalizeText(value || "").toLowerCase();
+}
+
+function isAppliedStatus(norm) {
+  return (
+    norm === "candidature envoyée" ||
+    norm === "candidature envoyee" ||
+    norm === "candidatures envoyées" ||
+    norm === "candidatures envoyees" ||
+    norm === "postulé" ||
+    norm === "postule" ||
+    norm === "candidature envoyee" ||
+    norm === "envoyée" ||
+    norm === "envoyee"
+  );
+}
+
+async function getStageStatusStats() {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const statusKey = map.status || "Status";
+  const statusProp = db.properties?.[statusKey];
+  if (!statusProp) throw new Error("Colonne Status introuvable dans la base.");
+
+  const rows = await listDbRows(token, normalizedDbId, null);
+  const counts = new Map();
+  rows.forEach((r) => {
+    const p = r.properties || {};
+    const raw = propText(p[statusKey]) || "Non renseigne";
+    const key = raw.trim() || "Non renseigne";
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+
+  let openCount = 0;
+  let appliedCount = 0;
+  let recaleCount = 0;
+  const otherBreakdown = [];
+
+  counts.forEach((count, status) => {
+    const norm = normalizeStatus(status);
+    if (norm === "ouvert") {
+      openCount += count;
+      return;
+    }
+    if (isAppliedStatus(norm)) {
+      appliedCount += count;
+      return;
+    }
+    if (norm === "recalé" || norm === "recale") {
+      recaleCount += count;
+      return;
+    }
+    otherBreakdown.push({ status, count });
+  });
+
+  otherBreakdown.sort((a, b) => b.count - a.count);
+
+  const total = rows.length;
+  const otherCount = Math.max(0, total - openCount - appliedCount - recaleCount);
+
+  return {
+    ok: true,
+    total,
+    open: openCount,
+    applied: appliedCount,
+    recale: recaleCount,
+    other: otherCount,
+    otherBreakdown,
+    capped: rows.length >= MAX_LIST_ROWS,
+  };
+}
+
+async function listStageDeadlines() {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const statusKey = map.status || "Status";
+  const closeDateKey = map.closeDate || "Date de fermeture";
+  const jobTitleKey = map.jobTitle || "Job Title";
+  const companyKey = map.company || "Entreprise";
+  const urlKey = map.url || "lien offre";
+
+  if (!db.properties?.[closeDateKey]) throw new Error("Colonne Date de fermeture introuvable.");
+
+  const rows = await listDbRows(token, normalizedDbId, null);
+  const now = new Date();
+  const horizon = new Date();
+  horizon.setDate(horizon.getDate() + 14);
+
+  const mapped = rows
+    .map((r) => {
+      const p = r.properties || {};
+      const closeDate = propText(p[closeDateKey]) || "";
+      const status = propText(p[statusKey]) || "";
+      return {
+        id: r.id,
+        title: propText(p[jobTitleKey]) || propText(p["Name"]) || "",
+        company: propText(p[companyKey]) || "",
+        url: propText(p[urlKey]) || "",
+        status,
+        closeDate,
+      };
+    })
+    .filter((item) => {
+      if (!item.closeDate) return false;
+      const d = new Date(item.closeDate);
+      if (Number.isNaN(d.getTime())) return false;
+      return d >= now && d <= horizon;
+    })
+    .sort((a, b) => new Date(a.closeDate) - new Date(b.closeDate));
+
+  return { ok: true, items: mapped };
+}
+
 async function isGoogleConnected() {
   try {
     await getAuthToken(false);
@@ -1594,6 +1898,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         capped: !!r?.capped,
       }),
     });
+  }
+
+  if (msg?.type === "GET_STAGE_STATUS_STATS") {
+    return respondWith(getStageStatusStats(), sendResponse, "Notion - stats stages", {
+      syncName: "notionStageStats",
+      successDetails: (r) => ({
+        total: r?.total ?? null,
+        capped: !!r?.capped,
+      }),
+    });
+  }
+
+  if (msg?.type === "GET_STAGE_DEADLINES") {
+    return respondWith(listStageDeadlines(), sendResponse, "Notion - deadlines stages", {
+      syncName: "notionStageDeadlines",
+    });
+  }
+
+  if (msg?.type === "URL_BLOCKER_RECHECK") {
+    return respondWith(
+      applyUrlBlockerRules().then(() => checkAllTabsForBlocker()).then(() => ({ ok: true })),
+      sendResponse,
+      "URL Blocker - recheck"
+    );
   }
 
   if (msg?.type === "GCAL_LIST_CALENDARS") {
@@ -2067,6 +2395,7 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
   flushOfflineQueue();
+  ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -2074,5 +2403,28 @@ chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
   flushOfflineQueue();
+  ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes[URL_BLOCKER_RULES_KEY] || changes[URL_BLOCKER_ENABLED_KEY]) {
+    applyUrlBlockerRules().then(checkAllTabsForBlocker);
+  }
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!changeInfo.url) return;
+  chrome.storage.local
+    .get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY])
+    .then((data) => {
+      if (data[URL_BLOCKER_ENABLED_KEY] === false) return;
+      const filters = normalizeUrlBlockerRules(data[URL_BLOCKER_RULES_KEY] || []);
+      if (!filters.length) return;
+      if (shouldBlockUrl(changeInfo.url, filters)) {
+        chrome.tabs.remove(tabId).catch(() => {});
+      }
+    })
+    .catch(() => {});
 });
 

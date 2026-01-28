@@ -68,7 +68,7 @@ function ensureTickerStyles() {
       padding-right: 10px;
       white-space: nowrap;
       will-change: transform;
-      animation: marketTickerScroll 45s linear infinite;
+      animation: marketTickerScroll 90s linear infinite;
     }
     .market-ticker-item {
       flex: 0 0 auto;
