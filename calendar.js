@@ -1,4 +1,4 @@
-ï»¿const calendarListEl = document.getElementById("calendar-list");
+const calendarListEl = document.getElementById("calendar-list");
 const notifyListEl = document.getElementById("notify-list");
 const calendarStatusEl = document.getElementById("calendar-status");
 const eventsEl = document.getElementById("calendar-view");
@@ -42,6 +42,16 @@ const durationBtns = Array.from(
 const durationRowEl = document.querySelector("#event-form-card .duration-row");
 const tabs = Array.from(document.querySelectorAll(".tab"));
 const filterBtns = Array.from(document.querySelectorAll(".filter"));
+const datepickerEl = document.getElementById("datepicker");
+const dpGridEl = document.getElementById("dp-grid");
+const dpTitleEl = document.getElementById("dp-title");
+const dpPrevBtn = document.getElementById("dp-prev");
+const dpNextBtn = document.getElementById("dp-next");
+const dpTimeEl = document.getElementById("dp-time");
+const dpHourEl = document.getElementById("dp-hour");
+const dpMinuteEl = document.getElementById("dp-minute");
+const dpClearBtn = document.getElementById("dp-clear");
+const dpTodayBtn = document.getElementById("dp-today");
 
 let calendars = [];
 let selectedIds = [];
@@ -58,6 +68,9 @@ let calendarFilterId = "all";
 let sortMode = "start-asc";
 let lastEvents = [];
 const CAL_LAST_REFRESH_KEY = "calendarLastRefresh";
+let activeDateInput = null;
+let activePickerMode = "date";
+let dpMonth = new Date();
 
 function todayLocalDateInput() {
   const d = new Date();
@@ -89,6 +102,54 @@ function parseDateTimeLocal(value) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function formatDateFr(date) {
+  if (!date) return "";
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+function formatDateTimeFr(date) {
+  if (!date) return "";
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getInputIsoValue(inputEl) {
+  if (!inputEl) return "";
+  return inputEl.dataset?.iso || inputEl.value || "";
+}
+
+function setInputDateValue(inputEl, date, mode, silent = false) {
+  if (!inputEl) return;
+  if (!date) {
+    inputEl.value = "";
+    inputEl.dataset.iso = "";
+    if (!silent) inputEl.dispatchEvent(new Event("change"));
+    return;
+  }
+  if (mode === "datetime") {
+    const iso = toDateTimeLocalValue(date);
+    inputEl.dataset.iso = iso;
+    inputEl.value = formatDateTimeFr(date);
+  } else {
+    const iso = toDateOnlyValue(date);
+    inputEl.dataset.iso = iso;
+    inputEl.value = formatDateFr(date);
+  }
+  if (!silent) inputEl.dispatchEvent(new Event("change"));
+}
 function collectAttendees(value) {
   return String(value || "")
     .split(",")
@@ -112,7 +173,7 @@ function setSubmittingEventForm(nextSubmitting) {
   isSubmittingEvent = !!nextSubmitting;
   if (eventSubmitBtn) {
     eventSubmitBtn.disabled = isSubmittingEvent;
-    eventSubmitBtn.textContent = isSubmittingEvent ? "CrÃ©ation..." : "CrÃ©er lâ€™Ã©vÃ©nement";
+    eventSubmitBtn.textContent = isSubmittingEvent ? "Création..." : "Créer l’événement";
   }
 }
 
@@ -135,7 +196,7 @@ function renderAttendeeChips() {
     const del = document.createElement("button");
     del.type = "button";
     del.setAttribute("aria-label", `Supprimer ${email}`);
-    del.textContent = "Ã—";
+    del.textContent = "×";
     del.addEventListener("click", () => {
       attendeeChips = attendeeChips.filter((e) => e !== email);
       renderAttendeeChips();
@@ -163,7 +224,7 @@ function verifyAttendeesField() {
     setAttendeesStatus(`Emails invalides: ${invalid.slice(0, 3).join(", ")}`, "error");
   } else {
     eventAttendeesEl.classList.add("attendees-valid");
-    setAttendeesStatus(`${attendees.length} invitÃ©(s) vÃ©rifiÃ©(s).`, "ok");
+    setAttendeesStatus(`${attendees.length} invité(s) vérifié(s).`, "ok");
   }
   return { attendees, invalid };
 }
@@ -260,7 +321,7 @@ function pickLocationSuggestion(item) {
   hideLocationSuggestions();
   setLocationLoading(false);
   setLocationValidityClass("ok");
-  setLocationStatus("Adresse suggÃ©rÃ©e validÃ©e.", "ok");
+  setLocationStatus("Adresse suggérée validée.", "ok");
 }
 
 function debounceLocationSuggestions(query) {
@@ -279,7 +340,7 @@ function debounceLocationSuggestions(query) {
         if (chrome.runtime.lastError) return;
         if (!res?.ok) {
           if (res?.code === "PLACES_KEY_MISSING") {
-            setLocationStatus("Ajoute une clÃ© Google Places dans Options.", "error");
+            setLocationStatus("Ajoute une clé Google Places dans Options.", "error");
             setLocationValidityClass("error");
           } else {
             const msg = res?.error || "";
@@ -312,15 +373,15 @@ function geocodeLocationOnBlur() {
       if (chrome.runtime.lastError) return;
       if (!res?.ok) {
         if (res?.code === "PLACES_KEY_MISSING") {
-          setLocationStatus("Ajoute une clÃ© Google Places dans Options.", "error");
+          setLocationStatus("Ajoute une clé Google Places dans Options.", "error");
         } else {
-          setLocationStatus(res?.error || "Adresse non vÃ©rifiÃ©e.", "error");
+          setLocationStatus(res?.error || "Adresse non vérifiée.", "error");
         }
         setLocationValidityClass("error");
         return;
       }
       if (!res.result) {
-        setLocationStatus("Adresse non trouvÃ©e.", "error");
+        setLocationStatus("Adresse non trouvée.", "error");
         setLocationValidityClass("error");
         return;
       }
@@ -332,7 +393,7 @@ function geocodeLocationOnBlur() {
       if (eventLocationEl && res.result.formattedAddress) {
         eventLocationEl.value = res.result.formattedAddress;
       }
-      setLocationStatus("Adresse vÃ©rifiÃ©e.", "ok");
+      setLocationStatus("Adresse vérifiée.", "ok");
       setLocationValidityClass("ok");
     }
   );
@@ -353,7 +414,7 @@ function resetEventFormAfterSuccess(message) {
   setLocationStatus("", null);
   setLocationValidityClass(null);
   prefillEventForm();
-  setEventFormStatus(message || "OpÃ©ration rÃ©ussie.", "ok");
+  setEventFormStatus(message || "Opération réussie.", "ok");
   toggleEventForm(false);
 }
 
@@ -377,7 +438,7 @@ function prefillFormFromEvent(ev) {
     if (normalizeText(ev.location || "")) {
       selectedLocationInfo = { description: ev.location || "", lat: null, lng: null };
       setLocationValidityClass("ok");
-      setLocationStatus("Adresse existante (non revalidÃ©e).", null);
+      setLocationStatus("Adresse existante (non revalidée).", null);
     } else {
       selectedLocationInfo = null;
       setLocationValidityClass(null);
@@ -397,18 +458,18 @@ function prefillFormFromEvent(ev) {
   const end = ev.end ? new Date(ev.end) : null;
   if (start && !Number.isNaN(start.getTime()) && eventStartEl) {
     if (eventAllDayEl?.checked) {
-      eventStartEl.value = ev.start;
+      setInputDateValue(eventStartEl, start, "date");
     } else {
-      eventStartEl.value = toDateTimeLocalValue(start);
+      setInputDateValue(eventStartEl, start, "datetime");
     }
   }
   if (end && !Number.isNaN(end.getTime()) && eventEndEl) {
     if (eventAllDayEl?.checked) {
       const endInclusive = new Date(end);
       endInclusive.setDate(endInclusive.getDate() - 1);
-      eventEndEl.value = toDateOnlyValue(endInclusive);
+      setInputDateValue(eventEndEl, endInclusive, "date");
     } else {
-      eventEndEl.value = toDateTimeLocalValue(end);
+      setInputDateValue(eventEndEl, end, "datetime");
     }
   }
 
@@ -438,11 +499,11 @@ function startEditingEvent(ev) {
 function applyDurationFromStart(minutes) {
   if (!eventStartEl || !eventEndEl) return;
   if (eventAllDayEl?.checked) return;
-  const start = parseDateTimeLocal(eventStartEl.value);
+  const start = parseDateTimeLocal(getInputIsoValue(eventStartEl));
   if (!start) return;
   const end = new Date(start);
   end.setMinutes(end.getMinutes() + minutes);
-  eventEndEl.value = toDateTimeLocalValue(end);
+  setInputDateValue(eventEndEl, end, "datetime");
 }
 
 function toggleEventForm(forceOpen) {
@@ -451,7 +512,7 @@ function toggleEventForm(forceOpen) {
   isEventFormOpen = nextOpen;
   eventFormCard.classList.toggle("form-hidden", !nextOpen);
   if (createEventBtn) {
-    createEventBtn.textContent = nextOpen ? "Fermer le formulaire" : "CrÃ©er un Ã©vÃ©nement";
+    createEventBtn.textContent = nextOpen ? "Fermer le formulaire" : "Créer un événement";
   }
 }
 
@@ -460,21 +521,28 @@ function applyAllDayMode(isAllDay) {
   if (durationRowEl) durationRowEl.style.display = isAllDay ? "none" : "";
 
   if (isAllDay) {
-    const start = parseDateTimeLocal(eventStartEl.value) || parseDateOnly(eventStartEl.value);
-    const end = parseDateTimeLocal(eventEndEl.value) || parseDateOnly(eventEndEl.value);
-    if (start) eventStartEl.value = toDateOnlyValue(start);
-    if (end) eventEndEl.value = toDateOnlyValue(end);
-    eventStartEl.type = "date";
-    eventEndEl.type = "date";
+    const start = parseDateTimeLocal(getInputIsoValue(eventStartEl)) || parseDateOnly(getInputIsoValue(eventStartEl));
+    const end = parseDateTimeLocal(getInputIsoValue(eventEndEl)) || parseDateOnly(getInputIsoValue(eventEndEl));
+    if (start) setInputDateValue(eventStartEl, start, "date");
+    if (end) setInputDateValue(eventEndEl, end, "date");
+    eventStartEl.dataset.picker = "date";
+    eventEndEl.dataset.picker = "date";
+    if (eventStartEl && !getInputIsoValue(eventStartEl)) {
+      setInputDateValue(eventStartEl, new Date(), "date");
+    }
+    if (eventEndEl && !getInputIsoValue(eventEndEl)) {
+      const base = parseDateOnly(getInputIsoValue(eventStartEl)) || new Date();
+      setInputDateValue(eventEndEl, base, "date");
+    }
   } else {
-    eventStartEl.type = "datetime-local";
-    eventEndEl.type = "datetime-local";
-    const startDate = parseDateOnly(eventStartEl.value) || new Date();
+    eventStartEl.dataset.picker = "datetime";
+    eventEndEl.dataset.picker = "datetime";
+    const startDate = parseDateOnly(getInputIsoValue(eventStartEl)) || new Date();
     startDate.setHours(9, 0, 0, 0);
     const endDate = new Date(startDate);
     endDate.setHours(startDate.getHours() + 1);
-    eventStartEl.value = toDateTimeLocalValue(startDate);
-    eventEndEl.value = toDateTimeLocalValue(endDate);
+    setInputDateValue(eventStartEl, startDate, "datetime");
+    setInputDateValue(eventEndEl, endDate, "datetime");
   }
 }
 
@@ -482,12 +550,12 @@ function prefillEventForm() {
   if (!eventStartEl || !eventEndEl) return;
   if (eventAllDayEl) eventAllDayEl.checked = false;
   applyAllDayMode(false);
-  const base = parseDateInput(dateEl.value);
+  const base = parseDateInput(getInputIsoValue(dateEl));
   base.setHours(9, 0, 0, 0);
   const end = new Date(base);
   end.setHours(base.getHours() + 1);
-  eventStartEl.value = toDateTimeLocalValue(base);
-  eventEndEl.value = toDateTimeLocalValue(end);
+  setInputDateValue(eventStartEl, base, "datetime");
+  setInputDateValue(eventEndEl, end, "datetime");
 }
 
 async function pickCalendarId() {
@@ -499,7 +567,7 @@ async function pickCalendarId() {
   );
 
   if (writableIds.size === 0) {
-    throw new Error("Aucun calendrier inscriptible (owner/writer) trouvÃ©.");
+    throw new Error("Aucun calendrier inscriptible (owner/writer) trouvé.");
   }
 
   if (gcalDefaultCalendar && writableIds.has(gcalDefaultCalendar)) {
@@ -525,15 +593,15 @@ async function submitCreateEvent() {
   }
 
   const isAllDay = !!eventAllDayEl?.checked;
-  const start = isAllDay ? parseDateOnly(eventStartEl?.value) : parseDateTimeLocal(eventStartEl?.value);
-  const end = isAllDay ? parseDateOnly(eventEndEl?.value) : parseDateTimeLocal(eventEndEl?.value);
+  const start = isAllDay ? parseDateOnly(getInputIsoValue(eventStartEl)) : parseDateTimeLocal(getInputIsoValue(eventStartEl));
+  const end = isAllDay ? parseDateOnly(getInputIsoValue(eventEndEl)) : parseDateTimeLocal(getInputIsoValue(eventEndEl));
   if (!start || (!isAllDay && end && end <= start)) {
     setEventFormStatus("Dates invalides.", "error");
     return;
   }
   if (isAllDay) {
     if (!end || end < start) {
-      if (eventEndEl) eventEndEl.value = toDateOnlyValue(start);
+      if (eventEndEl) setInputDateValue(eventEndEl, start, "date");
     }
   }
 
@@ -553,16 +621,16 @@ async function submitCreateEvent() {
   const locationText = normalizeText(eventLocationEl?.value || "");
   if (locationText && !isLocationValidated()) {
     setEventFormStatus(
-      "Lieu non vÃ©rifiÃ©. SÃ©lectionne une suggestion ou vÃ©rifie lâ€™adresse.",
+      "Lieu non vérifié. Sélectionne une suggestion ou vérifie l’adresse.",
       "error"
     );
-    setLocationStatus("Adresse non vÃ©rifiÃ©e.", "error");
+    setLocationStatus("Adresse non vérifiée.", "error");
     setLocationValidityClass("error");
     return;
   }
 
   setSubmittingEventForm(true);
-  setEventFormStatus("CrÃ©ation en cours...", null);
+  setEventFormStatus("Création en cours...", null);
   let calendarId;
   try {
     calendarId = await pickCalendarId();
@@ -643,7 +711,7 @@ async function submitCreateEvent() {
           setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
           return;
         }
-        resetEventFormAfterSuccess("Ã‰vÃ©nement mis Ã  jour.");
+        resetEventFormAfterSuccess("Événement mis à jour.");
         loadEvents();
         loadNextEvents();
       }
@@ -668,7 +736,7 @@ async function submitCreateEvent() {
         return;
       }
       setSubmittingEventForm(false);
-      resetEventFormAfterSuccess("Ã‰vÃ©nement crÃ©Ã©.");
+      resetEventFormAfterSuccess("Événement créé.");
       loadEvents();
       loadNextEvents();
     }
@@ -729,10 +797,7 @@ function rangeForView(date, mode) {
 }
 
 function setDateInput(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  dateEl.value = `${y}-${m}-${day}`;
+  setInputDateValue(dateEl, date, "date");
 }
 
 function formatShortDateTime(ts) {
@@ -750,16 +815,192 @@ function setRefreshStatus(ts) {
 function updateLastRefresh(ts) {
   const value = ts || Date.now();
   chrome.storage.local.set({ [CAL_LAST_REFRESH_KEY]: value });
-  setRefreshStatus(value);
+setRefreshStatus(value);
 }
+
+setupDatepicker();
 
 function toDateOnlyValue(date) {
   if (!(date instanceof Date)) return "";
   return dateKey(date);
 }
 
+function setDatepickerPosition(target) {
+  if (!datepickerEl || !target) return;
+  const rect = target.getBoundingClientRect();
+  const top = rect.bottom + 8;
+  const left = Math.min(window.innerWidth - 280, Math.max(12, rect.left));
+  datepickerEl.style.top = `${top}px`;
+  datepickerEl.style.left = `${left}px`;
+}
+
+function setDatepickerOpen(open) {
+  if (!datepickerEl) return;
+  datepickerEl.classList.toggle("open", !!open);
+  datepickerEl.setAttribute("aria-hidden", open ? "false" : "true");
+}
+
+function buildDayGrid(baseDate, selectedDate) {
+  if (!dpGridEl) return;
+  dpGridEl.innerHTML = "";
+  const year = baseDate.getFullYear();
+  const month = baseDate.getMonth();
+  const first = new Date(year, month, 1);
+  const start = weekStart(first);
+  const todayKey = todayLocalDateInput();
+  const selectedKey = selectedDate ? dateKey(selectedDate) : "";
+
+  for (let i = 0; i < 42; i += 1) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "dp-day";
+    if (d.getMonth() !== month) btn.classList.add("out");
+    if (dateKey(d) === todayKey) btn.classList.add("today");
+    if (selectedKey && dateKey(d) === selectedKey) btn.classList.add("selected");
+    btn.textContent = String(d.getDate());
+    btn.addEventListener("click", () => {
+      pickDate(d);
+    });
+    dpGridEl.appendChild(btn);
+  }
+}
+
+function formatMonthTitle(date) {
+  return date.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+}
+
+function pickDate(date) {
+  if (!activeDateInput) return;
+  if (activePickerMode === "datetime") {
+    const hour = Number.parseInt(dpHourEl?.value || "9", 10);
+    const minute = Number.parseInt(dpMinuteEl?.value || "0", 10);
+    const next = new Date(date);
+    next.setHours(hour, minute, 0, 0);
+    setInputDateValue(activeDateInput, next, "datetime");
+  } else {
+    setInputDateValue(activeDateInput, date, "date");
+  }
+  setDatepickerOpen(false);
+}
+
+function syncTimeSelectors(value) {
+  if (!dpHourEl || !dpMinuteEl) return;
+  let hour = 9;
+  let minute = 0;
+  const parsed = parseDateTimeLocal(value);
+  if (parsed) {
+    hour = parsed.getHours();
+    minute = parsed.getMinutes();
+  }
+  dpHourEl.value = String(hour).padStart(2, "0");
+  dpMinuteEl.value = String(minute).padStart(2, "0");
+}
+
+function openDatepicker(inputEl) {
+  if (!datepickerEl || !inputEl) return;
+  activeDateInput = inputEl;
+  activePickerMode = inputEl.dataset.picker === "datetime" ? "datetime" : "date";
+  const currentDate =
+    activePickerMode === "datetime"
+      ? parseDateTimeLocal(getInputIsoValue(inputEl)) || new Date()
+      : parseDateOnly(getInputIsoValue(inputEl)) || new Date();
+  dpMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+  if (dpTitleEl) dpTitleEl.textContent = formatMonthTitle(dpMonth);
+  if (dpTimeEl) dpTimeEl.style.display = activePickerMode === "datetime" ? "flex" : "none";
+  if (activePickerMode === "datetime") {
+    syncTimeSelectors(getInputIsoValue(inputEl));
+  }
+  buildDayGrid(dpMonth, currentDate);
+  setDatepickerPosition(inputEl);
+  setDatepickerOpen(true);
+}
+
+function closeDatepicker() {
+  setDatepickerOpen(false);
+  activeDateInput = null;
+}
+
+function setupDatepicker() {
+  if (!datepickerEl) return;
+  if (dpHourEl && dpHourEl.options.length === 0) {
+    for (let h = 0; h < 24; h += 1) {
+      const opt = document.createElement("option");
+      opt.value = String(h).padStart(2, "0");
+      opt.textContent = String(h).padStart(2, "0");
+      dpHourEl.appendChild(opt);
+    }
+  }
+  if (dpMinuteEl && dpMinuteEl.options.length === 0) {
+    for (let m = 0; m < 60; m += 5) {
+      const opt = document.createElement("option");
+      opt.value = String(m).padStart(2, "0");
+      opt.textContent = String(m).padStart(2, "0");
+      dpMinuteEl.appendChild(opt);
+    }
+  }
+
+  dpPrevBtn?.addEventListener("click", () => {
+    dpMonth = new Date(dpMonth.getFullYear(), dpMonth.getMonth() - 1, 1);
+    if (dpTitleEl) dpTitleEl.textContent = formatMonthTitle(dpMonth);
+    const selected = activeDateInput
+      ? parseDateOnly(activeDateInput.value) || parseDateTimeLocal(activeDateInput.value)
+      : null;
+    buildDayGrid(dpMonth, selected);
+  });
+  dpNextBtn?.addEventListener("click", () => {
+    dpMonth = new Date(dpMonth.getFullYear(), dpMonth.getMonth() + 1, 1);
+    if (dpTitleEl) dpTitleEl.textContent = formatMonthTitle(dpMonth);
+    const selected = activeDateInput
+      ? parseDateOnly(activeDateInput.value) || parseDateTimeLocal(activeDateInput.value)
+      : null;
+    buildDayGrid(dpMonth, selected);
+  });
+  dpTodayBtn?.addEventListener("click", () => {
+    pickDate(new Date());
+  });
+  dpClearBtn?.addEventListener("click", () => {
+    if (activeDateInput) activeDateInput.value = "";
+    setDatepickerOpen(false);
+  });
+  dpHourEl?.addEventListener("change", () => {
+    if (activeDateInput && activePickerMode === "datetime") {
+      const current = parseDateTimeLocal(getInputIsoValue(activeDateInput)) || new Date();
+      current.setHours(Number.parseInt(dpHourEl.value, 10) || 0);
+      current.setMinutes(Number.parseInt(dpMinuteEl.value, 10) || 0);
+      setInputDateValue(activeDateInput, current, "datetime");
+    }
+  });
+  dpMinuteEl?.addEventListener("change", () => {
+    if (activeDateInput && activePickerMode === "datetime") {
+      const current = parseDateTimeLocal(getInputIsoValue(activeDateInput)) || new Date();
+      current.setHours(Number.parseInt(dpHourEl.value, 10) || 0);
+      current.setMinutes(Number.parseInt(dpMinuteEl.value, 10) || 0);
+      setInputDateValue(activeDateInput, current, "datetime");
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!datepickerEl.classList.contains("open")) return;
+    const target = e.target;
+    if (datepickerEl.contains(target)) return;
+    if (target && target.dataset && target.dataset.picker) return;
+    closeDatepicker();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeDatepicker();
+  });
+
+  const inputs = [dateEl, eventStartEl, eventEndEl].filter(Boolean);
+  inputs.forEach((input) => {
+    input.addEventListener("click", () => openDatepicker(input));
+    input.addEventListener("focus", () => openDatepicker(input));
+  });
+}
+
 function shiftDate(direction) {
-  const current = parseDateInput(dateEl.value);
+  const current = parseDateInput(getInputIsoValue(dateEl));
   const next = new Date(current);
 
   if (viewMode === "month") {
@@ -994,7 +1235,7 @@ function attachDragToEvent(block, ev, dayDate, gridEl) {
           setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
           return;
         }
-        setEventFormStatus("Ã‰vÃ©nement dÃ©placÃ©.", "ok");
+        setEventFormStatus("Événement déplacé.", "ok");
         loadEvents();
         loadNextEvents();
       }
@@ -1085,7 +1326,7 @@ function exportEvents() {
   const payload = {
     exportedAt: new Date().toISOString(),
     viewMode,
-    date: dateEl?.value || "",
+    date: getInputIsoValue(dateEl) || "",
     filters: {
       calendarFilterId,
       meetingFilter,
@@ -1160,7 +1401,7 @@ function makeEventChip(ev) {
     loc.href = mapsUrl;
     loc.target = "_blank";
     loc.rel = "noreferrer";
-    loc.textContent = `ðŸ“ ${locationText}`;
+    loc.textContent = `?? ${locationText}`;
     loc.addEventListener("click", (e) => e.stopPropagation());
     chip.appendChild(loc);
   }
@@ -1179,7 +1420,7 @@ function makeEventChip(ev) {
   if (Array.isArray(ev.tags) && ev.tags.length) {
     const tags = document.createElement("div");
     tags.className = "event-meta";
-    tags.textContent = ev.tags.join(" Â· ");
+    tags.textContent = ev.tags.join(" · ");
     chip.appendChild(tags);
   }
 
@@ -1212,7 +1453,7 @@ function makeEventChip(ev) {
   delBtn.textContent = "Supprimer";
   delBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const ok = window.confirm("Supprimer cet Ã©vÃ©nement ?");
+    const ok = window.confirm("Supprimer cet événement ?");
     if (!ok) return;
     const hasAttendees = Array.isArray(ev.attendees) && ev.attendees.length > 0;
     chrome.runtime.sendMessage(
@@ -1236,7 +1477,7 @@ function makeEventChip(ev) {
         if (editingEvent?.id === ev.id) {
           editingEvent = null;
         }
-        setEventFormStatus("Ã‰vÃ©nement supprimÃ©.", "ok");
+        setEventFormStatus("Événement supprimé.", "ok");
         loadEvents();
         loadNextEvents();
       }
@@ -1277,7 +1518,7 @@ function renderEvents(items) {
     groups.get(key).push(ev);
   });
 
-  const baseDate = parseDateInput(dateEl.value);
+  const baseDate = parseDateInput(getInputIsoValue(dateEl));
   if (viewMode === "agenda") {
     const list = document.createElement("div");
     list.className = "agenda-list";
@@ -1312,7 +1553,7 @@ function renderEvents(items) {
       title.textContent = normalizeText(ev.summary || "Evenement");
       const meta = document.createElement("div");
       meta.className = "agenda-meta";
-      meta.textContent = isAllDayEvent(ev) ? "Toute la journÃ©e" : formatEventTime(ev);
+      meta.textContent = isAllDayEvent(ev) ? "Toute la journée" : formatEventTime(ev);
       content.appendChild(title);
       content.appendChild(meta);
       row.appendChild(content);
@@ -1341,7 +1582,7 @@ function renderEvents(items) {
     allDayRow.className = "all-day-row";
     const allDayLabel = document.createElement("div");
     allDayLabel.className = "all-day-label";
-    allDayLabel.textContent = "Toute la journÃ©e";
+    allDayLabel.textContent = "Toute la journée";
     const allDayList = document.createElement("div");
     allDayList.className = "all-day-list";
     allDay.forEach((ev) => {
@@ -1414,7 +1655,7 @@ function renderEvents(items) {
     allDayRow.className = "week-all-day";
     const allDayLabel = document.createElement("div");
     allDayLabel.className = "all-day-label";
-    allDayLabel.textContent = "Toute la journÃ©e";
+    allDayLabel.textContent = "Toute la journée";
     allDayRow.appendChild(allDayLabel);
 
     for (let i = 0; i < 7; i += 1) {
@@ -1610,7 +1851,7 @@ let eventsDebounceId = null;
 function loadEvents() {
   if (eventsDebounceId) clearTimeout(eventsDebounceId);
   eventsDebounceId = setTimeout(() => {
-    const date = parseDateInput(dateEl.value);
+    const date = parseDateInput(getInputIsoValue(dateEl));
     const { timeMin, timeMax } = rangeForView(date, viewMode);
     const now = new Date();
     const min = new Date(timeMin);
@@ -1646,9 +1887,9 @@ function loadEvents() {
 }
 
 function manualRefresh() {
-  eventsStatusEl.textContent = "RafraÃ®chissement...";
+  eventsStatusEl.textContent = "Rafraîchissement...";
   chrome.runtime.sendMessage({ type: "GCAL_CLEAR_EVENT_CACHE" }, () => {
-    // MÃªme si le clear Ã©choue, on tente un rechargement.
+    // Même si le clear échoue, on tente un rechargement.
     lastEvents = [];
     loadEvents();
     loadNextEvents();
@@ -1744,30 +1985,37 @@ if (eventSubmitBtn) {
 }
 
   if (eventStartEl) {
-    eventStartEl.addEventListener("change", () => {
-      if (eventAllDayEl?.checked) {
-        const start = parseDateOnly(eventStartEl.value);
+  eventStartEl.addEventListener("change", () => {
+    if (eventAllDayEl?.checked) {
+      const start = parseDateOnly(getInputIsoValue(eventStartEl));
       if (start && eventEndEl) {
-        const end = parseDateOnly(eventEndEl.value) || new Date(start);
-        if (end <= start) {
+        const end = parseDateOnly(getInputIsoValue(eventEndEl)) || new Date(start);
+        if (end < start) {
           const nextDay = new Date(start);
           nextDay.setDate(nextDay.getDate() + 1);
-          eventEndEl.value = toDateOnlyValue(nextDay);
+          setInputDateValue(eventEndEl, nextDay, "date", true);
         }
       }
       return;
     }
-    const start = parseDateTimeLocal(eventStartEl.value);
-    const end = parseDateTimeLocal(eventEndEl?.value);
-    if (!start) return;
-    if (!end) return;
-      if (end <= start) {
-        applyDurationFromStart(60);
-      }
-    });
-  }
+    const start = parseDateTimeLocal(getInputIsoValue(eventStartEl));
+    const end = parseDateTimeLocal(getInputIsoValue(eventEndEl));
+    if (!start || !end) return;
+    if (end <= start) {
+      applyDurationFromStart(60);
+    }
+  });
+}
 
 if (eventEndEl) {
+  eventEndEl.addEventListener("change", () => {
+    if (!eventAllDayEl?.checked) return;
+    const start = parseDateOnly(getInputIsoValue(eventStartEl));
+    const end = parseDateOnly(getInputIsoValue(eventEndEl));
+    if (start && end && end < start) {
+      setInputDateValue(eventEndEl, start, "date", true);
+    }
+  });
 }
 
 if (eventAllDayEl) {
@@ -1836,8 +2084,9 @@ filterBtns.forEach((btn) => {
   });
 });
 
-dateEl.value = todayLocalDateInput();
+setInputDateValue(dateEl, new Date(), "date");
 loadCalendars();
+
 
 
 

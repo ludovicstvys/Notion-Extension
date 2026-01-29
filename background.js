@@ -19,6 +19,7 @@ const NOTION_SYNC_KEY = "notionCalendarSyncEnabled";
 const NOTION_SYNC_MAP = "notionCalendarMap";
 const DEADLINE_PREFS_KEY = "deadlinePrefs";
 const DEADLINE_ALARM_PREFIX = "deadline|";
+const INTERVIEW_ALARM_PREFIX = "interview|";
 const OFFLINE_QUEUE_KEY = "offlineQueue";
 const YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const YAHOO_QUOTE_CACHE_MIN = 5;
@@ -28,6 +29,8 @@ const ECB_CACHE_KEY = "ecbFr10yCache";
 const ECB_CACHE_TTL_MS = 60 * 60 * 1000;
 const BDF_API_KEY_KEY = "bdfApiKey";
 const GOOGLE_PLACES_KEY_KEY = "googlePlacesApiKey";
+const STAGE_STATS_CACHE_KEY = "stageStatsCache";
+const STAGE_STATS_CACHE_TTL_MS = 5 * 60 * 1000;
 const DIAG_ERRORS_KEY = "diagErrors";
 const DIAG_ERRORS_LIMIT = 25;
 const DIAG_SYNC_KEY = "diagSyncStats";
@@ -662,7 +665,15 @@ async function fetchYahooQuotes(symbols) {
           const price =
             result?.meta?.regularMarketPrice ??
             result?.indicators?.quote?.[0]?.close?.slice(-1)?.[0];
-          const changePercent = result?.meta?.regularMarketChangePercent;
+          const changePercentRaw = result?.meta?.regularMarketChangePercent;
+          const prevClose =
+            result?.meta?.previousClose ??
+            result?.meta?.regularMarketPreviousClose ??
+            result?.meta?.chartPreviousClose;
+          let changePercent = Number.isFinite(changePercentRaw) ? changePercentRaw : null;
+          if (changePercent == null && Number.isFinite(price) && Number.isFinite(prevClose) && prevClose) {
+            changePercent = ((price - prevClose) / prevClose) * 100;
+          }
           bySymbol[symbol] = {
             symbol,
             price: price ?? null,
@@ -989,8 +1000,9 @@ async function syncNotionToCalendar() {
 
     const rows = await listDbRows(token, normalizedDbId);
     const { [NOTION_SYNC_MAP]: storedMap } = await chrome.storage.local.get([NOTION_SYNC_MAP]);
-    const syncMap = storedMap || {};
+    const syncMap = normalizeSyncMap(storedMap);
     let createdCount = 0;
+    let updatedCount = 0;
 
     for (const r of rows) {
       const p = r.properties || {};
@@ -1012,35 +1024,93 @@ async function syncNotionToCalendar() {
       const date = parseDateFromText(dateText);
       if (!date) continue;
 
-      const key = `${r.id}|${date}`;
-      if (syncMap[key]) continue;
-
       const summary = [company, title].filter(Boolean).join(" - ") || "Stage";
-      const event = {
+      const description = `${url || ""}\nnotion:${r.id}`.trim();
+      const eventPayload = {
         summary,
-        description: url,
+        description,
         start: { date },
         end: { date },
       };
 
-      const created = await createCalendarEvent(calendarId, event);
-      syncMap[key] = {
-        eventId: created.id,
+      const existing = syncMap.pages[r.id];
+      if (existing?.eventId) {
+        try {
+          await updateCalendarEvent(existing.calendarId || calendarId, existing.eventId, eventPayload);
+          syncMap.pages[r.id] = {
+            eventId: existing.eventId,
+            calendarId: existing.calendarId || calendarId,
+            date,
+            updatedAt: Date.now(),
+          };
+          syncMap.events[existing.eventId] = r.id;
+          updatedCount += 1;
+        } catch (err) {
+          const created = await createCalendarEvent(calendarId, eventPayload);
+          syncMap.pages[r.id] = {
+            eventId: created.id,
+            calendarId,
+            date,
+            createdAt: Date.now(),
+          };
+          syncMap.events[created.id] = r.id;
+          createdCount += 1;
+        }
+      } else {
+        const created = await createCalendarEvent(calendarId, eventPayload);
+        syncMap.pages[r.id] = {
+          eventId: created.id,
+          calendarId,
+          date,
+          createdAt: Date.now(),
+        };
+        syncMap.events[created.id] = r.id;
+        createdCount += 1;
+      }
+    }
+
+    // Calendar -> Notion: update date if event changed.
+    const now = new Date();
+    const timeMin = toIsoStringLocal(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
+    const timeMax = toIsoStringLocal(new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000));
+    const events = await listCalendarEvents(calendarId, timeMin, timeMax, false);
+    const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+    const closeDateKey = map.closeDate || map.openDate || map.startMonth || "Date de fermeture";
+    const dateProp = db.properties?.[closeDateKey];
+
+    for (const ev of events) {
+      const desc = ev.description || "";
+      const match = desc.match(/notion:([0-9a-fA-F-]+)/);
+      const pageId = match?.[1] || syncMap.events[ev.id];
+      if (!pageId) continue;
+      const evDate = (ev.start?.date || ev.start?.dateTime || "").slice(0, 10);
+      if (!evDate) continue;
+      const current = syncMap.pages[pageId];
+      if (current?.date === evDate) continue;
+      if (!dateProp) continue;
+      const properties =
+        dateProp.type === "date"
+          ? { [closeDateKey]: { date: { start: evDate } } }
+          : { [closeDateKey]: { rich_text: [{ text: { content: evDate } }] } };
+      await notionFetch(token, `pages/${pageId}`, "PATCH", { properties });
+      syncMap.pages[pageId] = {
+        eventId: ev.id,
         calendarId,
-        date,
-        createdAt: Date.now(),
+        date: evDate,
+        updatedAt: Date.now(),
       };
-      createdCount += 1;
+      syncMap.events[ev.id] = pageId;
     }
 
     await chrome.storage.local.set({ [NOTION_SYNC_MAP]: syncMap });
     await recordDiagnosticSync(syncName, "ok", {
       created: createdCount,
+      updated: updatedCount,
       scanned: rows.length,
       calendarId,
       statusMapApplied: !!statusMap,
     });
-    return { ok: true, created: createdCount, scanned: rows.length };
+    return { ok: true, created: createdCount, updated: updatedCount, scanned: rows.length };
   } catch (err) {
     await handleError(err, "Sync Notion â†’ Calendar", null, {
       syncName,
@@ -1247,7 +1317,7 @@ async function loadEventsRange(timeMin, timeMax, calendarIds, interactive) {
 
 async function scheduleDeadlineAlerts(rows, map) {
   const { deadlinePrefs } = await chrome.storage.local.get([DEADLINE_PREFS_KEY]);
-  const prefs = deadlinePrefs || { enabled: true, offsets: [24, 48, 168] };
+  const prefs = deadlinePrefs || { enabled: true, offsets: [24, 72, 168] };
   if (!prefs.enabled) return;
 
   const urlKey = map.url || "lien offre";
@@ -1640,6 +1710,186 @@ async function listTodoStages() {
   };
 }
 
+async function listAllStages() {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const rows = await listDbRows(token, normalizedDbId, null);
+  const mapped = rows.map((r) => {
+    const p = r.properties || {};
+    const jobTitleKey = map.jobTitle || "Job Title";
+    const companyKey = map.company || "Entreprise";
+    const urlKey = map.url || "lien offre";
+    const statusKeyLocal = map.status || "Status";
+    const closeDateKey = map.closeDate || "Date de fermeture";
+    const notesKey = map.notes || "Notes";
+    return {
+      id: r.id,
+      title: propText(p[jobTitleKey]) || propText(p["Name"]) || "",
+      company: propText(p[companyKey]) || "",
+      url: propText(p[urlKey]) || "",
+      status: propText(p[statusKeyLocal]) || "",
+      closeDate: propText(p[closeDateKey]) || "",
+      notes: propText(p[notesKey]) || "",
+    };
+  });
+
+  return {
+    ok: true,
+    items: mapped,
+    total: rows.length,
+    capped: rows.length >= MAX_LIST_ROWS,
+  };
+}
+
+async function getStageById(pageId) {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+  if (!pageId) throw new Error("Stage ID manquant.");
+
+  const page = await notionFetch(token, `pages/${pageId}`, "GET");
+  const p = page.properties || {};
+  const jobTitleKey = map.jobTitle || "Job Title";
+  const companyKey = map.company || "Entreprise";
+  const locationKey = map.location || "Lieu";
+  const urlKey = map.url || "lien offre";
+  const statusKeyLocal = map.status || "Status";
+  const roleKey = map.role || "Role";
+  const typeKey = map.type || "Type d'infrastructure";
+  const applicationDateKey = map.applicationDate || "Application Date";
+  const startMonthKey = map.startMonth || "Start month";
+  const openDateKey = map.openDate || "Date d'ouverture";
+  const closeDateKey = map.closeDate || "Date de fermeture";
+  const notesKey = map.notes || "Notes";
+
+  return {
+    ok: true,
+    item: {
+      id: page.id,
+      title: propText(p[jobTitleKey]) || propText(p["Name"]) || "",
+      company: propText(p[companyKey]) || "",
+      location: propText(p[locationKey]) || "",
+      url: propText(p[urlKey]) || "",
+      status: propText(p[statusKeyLocal]) || "",
+      role: propText(p[roleKey]) || "",
+      type: propText(p[typeKey]) || "",
+      applicationDate: propText(p[applicationDateKey]) || "",
+      startMonth: propText(p[startMonthKey]) || "",
+      openDate: propText(p[openDateKey]) || "",
+      closeDate: propText(p[closeDateKey]) || "",
+      notes: propText(p[notesKey]) || "",
+    },
+  };
+}
+
+async function updateStageNotes(payload) {
+  const { notionToken: token } = await chrome.storage.sync.get(["notionToken"]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token) throw new Error("Config Notion manquante (Options).");
+  const pageId = payload?.id;
+  if (!pageId) throw new Error("Stage ID manquant.");
+
+  const notesKey = map.notes || "Notes";
+  const notes = normalizeText(payload?.notes || "");
+  const properties = {
+    [notesKey]: { rich_text: notes ? [{ text: { content: notes } }] : [] },
+  };
+
+  await notionFetch(token, `pages/${pageId}`, "PATCH", { properties });
+  return { ok: true };
+}
+
+async function updateStageStatus(payload) {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap, notionStatusMap } = await chrome.storage.sync.get([
+    "notionFieldMap",
+    "notionStatusMap",
+  ]);
+  const map = notionFieldMap || {};
+  const statusMap = notionStatusMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const pageId = payload?.id;
+  const statusRaw = normalizeText(payload?.status || "");
+  if (!pageId) throw new Error("Stage ID manquant.");
+  if (!statusRaw) throw new Error("Status manquant.");
+
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const statusKey = map.status || "Status";
+  const statusProp = db.properties?.[statusKey];
+  if (!statusProp) throw new Error("Colonne Status introuvable dans la base.");
+
+  const value =
+    statusRaw.toLowerCase().startsWith("ouv")
+      ? statusMap.open || "Ouvert"
+      : statusRaw.toLowerCase().includes("candid")
+        ? statusMap.applied || "Candidature envoyee"
+        : statusRaw.toLowerCase().includes("entre")
+          ? statusMap.interview || "Entretien"
+          : statusRaw.toLowerCase().includes("refus") || statusRaw.toLowerCase().includes("recal")
+            ? statusMap.rejected || "Refusé"
+            : statusRaw;
+
+  let propPayload = null;
+  if (statusProp.type === "status") {
+    propPayload = { [statusKey]: { status: { name: value } } };
+  } else if (statusProp.type === "select") {
+    propPayload = { [statusKey]: { select: { name: value } } };
+  } else if (statusProp.type === "rich_text" || statusProp.type === "title") {
+    propPayload = { [statusKey]: { rich_text: [{ text: { content: value } }] } };
+  } else {
+    throw new Error("Type de colonne Status non supporte.");
+  }
+
+  await notionFetch(token, `pages/${pageId}`, "PATCH", { properties: propPayload });
+  return { ok: true };
+}
+
+async function checkTodoDb() {
+  const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionTodoDbId",
+  ]);
+  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid Todo database ID. Please paste the database URL or ID in Options.");
+  }
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const dbTitle = (db.title || []).map((t) => t?.plain_text || "").join("").trim();
+  return { ok: true, dbTitle };
+}
+
 function normalizeStatus(value) {
   return normalizeText(value || "").toLowerCase();
 }
@@ -1659,6 +1909,12 @@ function isAppliedStatus(norm) {
 }
 
 async function getStageStatusStats() {
+  const cached = await chrome.storage.local.get([STAGE_STATS_CACHE_KEY]);
+  const cacheEntry = cached[STAGE_STATS_CACHE_KEY];
+  if (cacheEntry?.at && Date.now() - cacheEntry.at < STAGE_STATS_CACHE_TTL_MS) {
+    return { ...cacheEntry.data, cached: true };
+  }
+
   const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
     "notionToken",
     "notionDbId",
@@ -1713,7 +1969,7 @@ async function getStageStatusStats() {
   const total = rows.length;
   const otherCount = Math.max(0, total - openCount - appliedCount - recaleCount);
 
-  return {
+  const result = {
     ok: true,
     total,
     open: openCount,
@@ -1723,6 +1979,10 @@ async function getStageStatusStats() {
     otherBreakdown,
     capped: rows.length >= MAX_LIST_ROWS,
   };
+  await chrome.storage.local.set({
+    [STAGE_STATS_CACHE_KEY]: { at: Date.now(), data: result },
+  });
+  return result;
 }
 
 async function listStageDeadlines() {
@@ -1776,6 +2036,109 @@ async function listStageDeadlines() {
     .sort((a, b) => new Date(a.closeDate) - new Date(b.closeDate));
 
   return { ok: true, items: mapped };
+}
+
+async function listNotionTodos() {
+  const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionTodoDbId",
+  ]);
+  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
+
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid Todo database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const props = db.properties || {};
+  const findKeyByName = (names) => {
+    const list = names.map((n) => n.toLowerCase());
+    return Object.keys(props).find((key) => list.includes(key.toLowerCase())) || "";
+  };
+  const findKeyByType = (types) => {
+    return (
+      Object.keys(props).find((key) => types.includes(props[key]?.type)) || ""
+    );
+  };
+
+  const statusKey = findKeyByName(["Status"]) || findKeyByType(["status", "select"]);
+  const taskKey = findKeyByName(["Task", "Name"]) || findKeyByType(["title"]);
+  const dueKey =
+    findKeyByName(["Due date", "Due Date", "Deadline", "Date"]) || findKeyByType(["date"]);
+  const notesKey = findKeyByName(["Notes", "Note"]) || findKeyByType(["rich_text"]);
+
+  const statusProp = props?.[statusKey];
+  if (!statusProp) throw new Error("Colonne Status introuvable dans la base Todo.");
+
+  let filter = null;
+  if (statusProp.type === "status") {
+    filter = { property: statusKey, status: { does_not_equal: "Done" } };
+  } else if (statusProp.type === "select") {
+    filter = { property: statusKey, select: { does_not_equal: "Done" } };
+  } else {
+    throw new Error("Type de colonne Status non supporte.");
+  }
+
+  const rows = await listDbRows(token, normalizedDbId, filter);
+  const mapped = rows.map((r) => {
+    const p = r.properties || {};
+    return {
+      id: r.id,
+      task: propText(p[taskKey]) || propText(p["Name"]) || "",
+      status: propText(p[statusKey]) || "",
+      dueDate: propText(p[dueKey]) || "",
+      notes: propText(p[notesKey]) || "",
+    };
+  });
+
+  return { ok: true, items: mapped };
+}
+
+async function createNotionTodo(payload) {
+  const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionTodoDbId",
+  ]);
+  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid Todo database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const task = normalizeText(payload?.task || "");
+  if (!task) throw new Error("Task obligatoire.");
+  const status = normalizeText(payload?.status || "Not Started");
+  const dueDate = normalizeText(payload?.dueDate || "");
+  const notes = normalizeText(payload?.notes || "");
+
+  const properties = {
+    Task: { title: [{ text: { content: task } }] },
+    Status: { select: { name: status } },
+  };
+  if (dueDate) properties["Due date"] = { date: { start: dueDate } };
+  if (notes) properties["Notes"] = { rich_text: [{ text: { content: notes } }] };
+
+  await notionFetch(token, `pages`, "POST", {
+    parent: { database_id: normalizedDbId },
+    properties,
+  });
+  return { ok: true };
+}
+
+async function updateNotionTodoStatus(payload) {
+  const { notionToken: token } = await chrome.storage.sync.get(["notionToken"]);
+  if (!token) throw new Error("Config Notion manquante (Options).");
+  const pageId = payload?.id;
+  if (!pageId) throw new Error("Todo ID manquant.");
+
+  const status = normalizeText(payload?.status || "Done");
+  const properties = {
+    Status: { select: { name: status } },
+  };
+
+  await notionFetch(token, `pages/${pageId}`, "PATCH", { properties });
+  return { ok: true };
 }
 
 async function isGoogleConnected() {
@@ -1880,6 +2243,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
   }
 
+  if (msg?.type === "CHECK_TODO_DB") {
+    return respondWith(checkTodoDb(), sendResponse, "Notion - vÃ©rification todo", {
+      syncName: "notionTodoCheck",
+    });
+  }
+
   if (msg?.type === "GET_OPEN_STAGES") {
     return respondWith(listOpenStages(), sendResponse, "Notion - stages ouverts", {
       syncName: "notionOpenStages",
@@ -1888,6 +2257,82 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         capped: !!r?.capped,
       }),
     });
+  }
+
+  if (msg?.type === "GET_ALL_STAGES") {
+    return respondWith(listAllStages(), sendResponse, "Notion - tous les stages", {
+      syncName: "notionAllStages",
+    });
+  }
+
+  if (msg?.type === "GET_STAGE_BY_ID") {
+    return respondWith(getStageById(msg?.payload?.id), sendResponse, "Notion - stage detail", {
+      syncName: "notionStageDetail",
+      meta: { id: msg?.payload?.id || null },
+    });
+  }
+
+  if (msg?.type === "UPDATE_STAGE_NOTES") {
+    return respondWith(
+      updateStageNotes(msg?.payload),
+      sendResponse,
+      "Notion - stage notes",
+      {
+        syncName: "notionStageNotes",
+        meta: { id: msg?.payload?.id || null },
+      }
+    );
+  }
+
+  if (msg?.type === "UPDATE_STAGE_STATUS") {
+    return respondWith(
+      updateStageStatus(msg?.payload),
+      sendResponse,
+      "Notion - stage status",
+      {
+        syncName: "notionStageStatus",
+        meta: { id: msg?.payload?.id || null },
+      }
+    );
+  }
+
+  if (msg?.type === "SCHEDULE_INTERVIEW_REMINDER") {
+    const { id, when, title, link } = msg?.payload || {};
+    if (!id || !when) {
+      sendResponse({ ok: false, error: "Parametres manquants." });
+      return true;
+    }
+    const whenMs = new Date(when).getTime();
+    if (!Number.isFinite(whenMs)) {
+      sendResponse({ ok: false, error: "Date invalide." });
+      return true;
+    }
+    const alarmName = `${INTERVIEW_ALARM_PREFIX}${id}`;
+    chrome.alarms.create(alarmName, { when: whenMs });
+    chrome.storage.local.set({
+      [alarmName]: {
+        title: title || "Entretien",
+        link: link || "",
+        when,
+      },
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg?.type === "CLEAR_INTERVIEW_REMINDER") {
+    const { id } = msg?.payload || {};
+    if (!id) {
+      sendResponse({ ok: false, error: "Parametres manquants." });
+      return true;
+    }
+    const alarmName = `${INTERVIEW_ALARM_PREFIX}${id}`;
+    chrome.alarms.clear(alarmName, () => {
+      chrome.storage.local.remove([alarmName], () => {
+        sendResponse({ ok: true });
+      });
+    });
+    return true;
   }
 
   if (msg?.type === "GET_TODO_STAGES") {
@@ -1913,6 +2358,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "GET_STAGE_DEADLINES") {
     return respondWith(listStageDeadlines(), sendResponse, "Notion - deadlines stages", {
       syncName: "notionStageDeadlines",
+    });
+  }
+
+  if (msg?.type === "LIST_TODO_NOTION") {
+    return respondWith(listNotionTodos(), sendResponse, "Notion - todo list", {
+      syncName: "notionTodoList",
+    });
+  }
+
+  if (msg?.type === "CREATE_TODO_NOTION") {
+    return respondWith(createNotionTodo(msg.payload), sendResponse, "Notion - todo create", {
+      syncName: "notionTodoCreate",
+    });
+  }
+
+  if (msg?.type === "UPDATE_TODO_NOTION") {
+    return respondWith(updateNotionTodoStatus(msg.payload), sendResponse, "Notion - todo update", {
+      syncName: "notionTodoUpdate",
     });
   }
 
@@ -2315,6 +2778,24 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
 
+  if (alarm.name.startsWith(INTERVIEW_ALARM_PREFIX)) {
+    chrome.storage.local.get([alarm.name], (data) => {
+      const info = data[alarm.name];
+      if (!info) return;
+      const message = info.when
+        ? `Rappel entretien: ${new Date(info.when).toLocaleString()}`
+        : "Rappel entretien";
+      chrome.notifications.create(alarm.name, {
+        type: "basic",
+        iconUrl: "icons/icon-128.png",
+        title: info.title || "Entretien",
+        message,
+        priority: 2,
+      });
+    });
+    return;
+  }
+
   if (alarm.name === YAHOO_NEWS_ALARM) {
     try {
       await getYahooNews(true);
@@ -2396,6 +2877,17 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
   flushOfflineQueue();
   ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
+});
+
+chrome.notifications.onClicked.addListener((notificationId) => {
+  if (!notificationId?.startsWith(INTERVIEW_ALARM_PREFIX)) return;
+  chrome.storage.local.get([notificationId], (data) => {
+    const info = data[notificationId];
+    const link = info?.link || "";
+    if (link && chrome?.tabs?.create) {
+      chrome.tabs.create({ url: link });
+    }
+  });
 });
 
 chrome.runtime.onStartup.addListener(() => {

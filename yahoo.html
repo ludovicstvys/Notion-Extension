@@ -82,21 +82,6 @@
         justify-content: center;
       }
       .topnav a:hover { border-color: rgba(56, 189, 248, 0.45); color: var(--accent); }
-      .market-strip {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin: 6px 0 14px;
-      }
-      .market-item {
-        padding: 6px 10px;
-        border-radius: 10px;
-        border: 1px solid var(--border);
-        background: var(--surface);
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 600;
-      }
       h1 { margin: 0; font-size: 26px; }
       .controls { display: flex; gap: 8px; flex-wrap: wrap; }
       .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -173,7 +158,6 @@
       <a href="search.html">Recherche</a>
     </nav>
     <a class="settings-btn" href="options.html" aria-label="Options">⚙️</a>
-    <div id="market-strip" class="market-strip"></div>
     <header>
       <div>
         <h1>Actualites Finance</h1>
@@ -219,7 +203,6 @@
     <p class="note" id="status">Chargement...</p>
     <div class="grid" id="news"></div>
 
-    <script src="market.js"></script>
     <script src="yahoo.js"></script>
   </body>
 </html>

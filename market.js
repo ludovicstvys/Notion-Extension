@@ -121,6 +121,16 @@ function loadMarketStrip() {
   if (!container) return;
   container.textContent = "Chargement marches...";
 
+  chrome.storage?.local?.get?.(["yahooQuotes", "ecbFr10yCache"], (cached) => {
+    const bySymbol = cached?.yahooQuotes?.bySymbol || {};
+    if (cached?.ecbFr10yCache?.value != null) {
+      bySymbol["^FR10Y"] = { symbol: "^FR10Y", price: cached.ecbFr10yCache.value };
+    }
+    if (Object.keys(bySymbol).length > 0) {
+      renderMarketStrip(container, bySymbol);
+    }
+  });
+
   const yahooSymbols = Array.from(
     new Set(MARKET_ITEMS.map((i) => i.symbol).filter((s) => s !== "^FR10Y"))
   );

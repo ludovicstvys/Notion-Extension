@@ -84,6 +84,9 @@
         padding: 16px;
         box-shadow: 0 18px 40px rgba(2, 6, 23, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04);
       }
+      .card + .card {
+        margin-top: 16px;
+      }
       h1 { margin: 0 0 8px; font-size: 24px; }
       .note { font-size: 12px; color: var(--muted); }
       .chart-wrap {
@@ -159,27 +162,178 @@
         gap: 8px;
       }
       .stage-row {
-        background: var(--surface-2);
+        position: relative;
+        background: linear-gradient(135deg, rgba(17, 24, 39, 0.9), rgba(11, 19, 36, 0.85));
         border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 8px 10px;
+        border-radius: 12px;
+        padding: 10px 12px;
         display: grid;
-        gap: 4px;
+        gap: 6px;
+        cursor: pointer;
+        transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
       }
-      .stage-title {
+      .stage-row:hover {
+        transform: translateY(-1px);
+        border-color: rgba(56, 189, 248, 0.45);
+        box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45);
+      }
+      .stage-company {
         font-size: 13px;
-        font-weight: 600;
+        font-weight: 700;
+        color: var(--text);
+        letter-spacing: 0.01em;
       }
-      .stage-meta {
-        font-size: 11px;
+      .stage-role {
+        font-size: 12px;
         color: var(--muted);
+      }
+      .stage-badges {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .stage-badge {
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        background: rgba(15, 23, 42, 0.6);
+        color: var(--muted);
+      }
+      .stage-badge.status {
+        color: #38bdf8;
+        border-color: rgba(56, 189, 248, 0.45);
+        background: rgba(56, 189, 248, 0.12);
+      }
+      .stage-badge.deadline {
+        color: #f59e0b;
+        border-color: rgba(245, 158, 11, 0.45);
+        background: rgba(245, 158, 11, 0.12);
       }
       .stage-row a {
         color: var(--accent);
         text-decoration: none;
         font-size: 12px;
       }
-    </style>
+      .stage-open-controls {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .stage-open-toggle {
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.6);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 4px 8px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .stage-open-list {
+        display: grid;
+        gap: 8px;
+        max-height: 220px;
+        overflow: auto;
+      }
+      .stage-open-list.minimized {
+        max-height: 72px;
+      }
+      .stage-all-list {
+        display: grid;
+        gap: 8px;
+        max-height: 320px;
+        overflow: auto;
+      }
+      .stage-search {
+        width: 100%;
+        margin: 6px 0 10px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.7);
+        color: var(--text);
+        font-size: 12px;
+      }
+      .stage-search::placeholder {
+        color: var(--muted);
+      }
+          .kanban-tabs {
+        display: inline-flex;
+        gap: 6px;
+        margin-bottom: 10px;
+        background: rgba(11, 19, 36, 0.6);
+        border: 1px solid var(--border);
+        padding: 4px;
+        border-radius: 10px;
+      }
+      .kanban-tab {
+        border: none;
+        padding: 6px 10px;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .kanban-tab.active {
+        background: rgba(56, 189, 248, 0.18);
+        border: 1px solid rgba(56, 189, 248, 0.35);
+      }
+      .kanban-board {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .kanban-column {
+        background: rgba(11, 19, 36, 0.6);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px;
+        min-height: 220px;
+        display: grid;
+        gap: 8px;
+      }
+      .kanban-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .kanban-count {
+        font-size: 11px;
+        color: var(--text);
+        padding: 2px 6px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.2);
+      }
+      .kanban-card {
+        background: linear-gradient(135deg, rgba(17, 24, 39, 0.9), rgba(11, 19, 36, 0.85));
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px;
+        display: grid;
+        gap: 6px;
+        cursor: grab;
+      }
+      .kanban-card.dragging {
+        opacity: 0.6;
+      }
+      .kanban-company {
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .kanban-role {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .kanban-hidden { display: none; }    </style>
   </head>
   <body>
     <nav class="topnav">
@@ -214,11 +368,34 @@
     </section>
 
     <section class="card">
-      <h2>Stages ouverts</h2>
+      <div class="stage-open-controls">
+        <h2>Stages ouverts</h2>
+        <button class="stage-open-toggle" id="stage-open-toggle" type="button">Minimiser</button>
+      </div>
       <p class="note" id="stage-open-status">Chargement...</p>
-      <div class="list" id="stage-open-list"></div>
+      <div class="list stage-open-list" id="stage-open-list"></div>
+    </section>
+
+    <section class="card">
+      <div class="kanban-tabs">
+        <button class="kanban-tab active" id="kanban-tab-list" type="button">Liste</button>
+        <button class="kanban-tab" id="kanban-tab-board" type="button">Kanban</button>
+      </div>
+      <div id="kanban-view-list">
+        <h2>Liste des stages</h2>
+      <input
+        class="stage-search"
+        id="stage-all-search"
+        type="search"
+        placeholder="Rechercher un stage..."
+        aria-label="Rechercher un stage"
+      />
+      <p class="note" id="stage-all-status">Chargement...</p>
+      <div class="list stage-all-list" id="stage-all-list"></div>
     </section>
 
     <script src="stage.js"></script>
   </body>
 </html>
+
+

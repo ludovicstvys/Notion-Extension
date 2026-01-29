@@ -146,6 +146,18 @@
         border: 1px solid rgba(148, 163, 184, 0.35);
         background: rgba(15, 23, 42, 0.75);
       }
+      .event-controls input[type="text"]#date {
+        height: 34px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.75);
+        color: var(--text);
+        font-weight: 600;
+        min-width: 132px;
+        text-align: center;
+        cursor: pointer;
+      }
       :root {
         --hour-height: 48px;
       }
@@ -395,6 +407,14 @@
         padding: 8px 10px;
         border-radius: 10px;
       }
+      input[data-picker] {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 8px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
       input[type="datetime-local"] {
         background: var(--surface-2);
         border: 1px solid var(--border);
@@ -465,13 +485,15 @@
       }
       #event-form-card input[type="text"]:hover,
       #event-form-card input[type="datetime-local"]:hover,
-      #event-form-card input[type="date"]:hover {
+      #event-form-card input[type="date"]:hover,
+      #event-form-card input[data-picker]:hover {
         border-color: rgba(56, 189, 248, 0.45);
         background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(11, 19, 36, 0.98));
       }
       #event-form-card input[type="text"]:focus-visible,
       #event-form-card input[type="datetime-local"]:focus-visible,
-      #event-form-card input[type="date"]:focus-visible {
+      #event-form-card input[type="date"]:focus-visible,
+      #event-form-card input[data-picker]:focus-visible {
         outline: none;
         border-color: rgba(56, 189, 248, 0.85);
         box-shadow:
@@ -822,6 +844,104 @@
         border-color: rgba(251, 113, 133, 0.7);
         color: var(--danger);
       }
+      .datepicker {
+        position: absolute;
+        z-index: 50;
+        min-width: 260px;
+        padding: 12px;
+        border-radius: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        background: rgba(11, 19, 36, 0.98);
+        box-shadow: 0 20px 60px rgba(2, 6, 23, 0.65);
+        display: none;
+      }
+      .datepicker.open { display: block; }
+      .dp-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .dp-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+        text-transform: capitalize;
+      }
+      .dp-nav {
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        background: rgba(15, 23, 42, 0.6);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      .dp-weekdays,
+      .dp-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 4px;
+      }
+      .dp-weekday {
+        font-size: 10px;
+        text-transform: uppercase;
+        color: var(--muted);
+        text-align: center;
+        letter-spacing: 0.08em;
+      }
+      .dp-day {
+        width: 32px;
+        height: 30px;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        background: rgba(15, 23, 42, 0.7);
+        color: var(--text);
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .dp-day.out { color: rgba(148, 163, 184, 0.5); }
+      .dp-day.today {
+        border-color: rgba(56, 189, 248, 0.8);
+        background: rgba(56, 189, 248, 0.15);
+      }
+      .dp-day.selected {
+        background: linear-gradient(135deg, rgba(56, 189, 248, 0.9), rgba(14, 165, 233, 0.8));
+        border-color: transparent;
+        color: #0b1220;
+        font-weight: 700;
+      }
+      .dp-time {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .dp-time select {
+        background: rgba(15, 23, 42, 0.8);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        color: var(--text);
+        padding: 6px 8px;
+        border-radius: 10px;
+        font-size: 12px;
+      }
+      .dp-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 10px;
+        gap: 8px;
+      }
+      .dp-action {
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        background: rgba(15, 23, 42, 0.6);
+        color: var(--text);
+        padding: 6px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 700;
+      }
     </style>
   </head>
   <body>
@@ -932,13 +1052,13 @@
             <label for="event-start" class="field-label">
               <span>Début</span>
             </label>
-            <input id="event-start" type="datetime-local" />
+            <input id="event-start" type="text" data-picker="datetime" readonly />
           </div>
           <div>
             <label for="event-end" class="field-label">
               <span>Fin</span>
             </label>
-            <input id="event-end" type="datetime-local" />
+            <input id="event-end" type="text" data-picker="datetime" readonly />
             <p class="note">Si la fin est vide, l’événement devient un rappel.</p>
           </div>
         </div>
@@ -1003,12 +1123,39 @@
                 <button class="btn secondary" id="next">Suivant</button>
               </div>
               <button class="btn secondary" id="today">Aujourd'hui</button>
-              <input type="date" id="date" aria-label="Date" />
+              <input type="text" id="date" data-picker="date" readonly aria-label="Date" />
             </div>
           </div>
           <p class="note" id="events-status">Aucun evenement charge.</p>
           <div class="calendar-view" id="calendar-view"></div>
         </section>
+      </div>
+    </div>
+
+    <div class="datepicker" id="datepicker" aria-hidden="true">
+      <div class="dp-header">
+        <button class="dp-nav" id="dp-prev" type="button">‹</button>
+        <div class="dp-title" id="dp-title">Janvier 2026</div>
+        <button class="dp-nav" id="dp-next" type="button">›</button>
+      </div>
+      <div class="dp-weekdays">
+        <div class="dp-weekday">Lu</div>
+        <div class="dp-weekday">Ma</div>
+        <div class="dp-weekday">Me</div>
+        <div class="dp-weekday">Je</div>
+        <div class="dp-weekday">Ve</div>
+        <div class="dp-weekday">Sa</div>
+        <div class="dp-weekday">Di</div>
+      </div>
+      <div class="dp-grid" id="dp-grid"></div>
+      <div class="dp-time" id="dp-time">
+        <select id="dp-hour" aria-label="Heure"></select>
+        <span>:</span>
+        <select id="dp-minute" aria-label="Minutes"></select>
+      </div>
+      <div class="dp-actions">
+        <button class="dp-action" id="dp-clear" type="button">Effacer</button>
+        <button class="dp-action" id="dp-today" type="button">Aujourd'hui</button>
       </div>
     </div>
 

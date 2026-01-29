@@ -1,23 +1,26 @@
 const eventsStatusEl = document.getElementById("home-events-status");
 const eventsEl = document.getElementById("home-events");
-const todoStatusEl = document.getElementById("home-todo-status");
-const todoEl = document.getElementById("home-todo");
 const newsStatusEl = document.getElementById("home-news-status");
 const newsEl = document.getElementById("home-news");
-const focusStatusEl = document.getElementById("focus-status");
-const focusEl = document.getElementById("focus-list");
 const addBtn = document.getElementById("home-add");
 const appliedCb = document.getElementById("home-applied");
 const addStatusEl = document.getElementById("home-add-status");
-const timelineStatusEl = document.getElementById("timeline-status");
-const timelineListEl = document.getElementById("timeline-list");
-const focusSwitchEl = document.getElementById("focus-switch");
+const marketsStatusEl = document.getElementById("markets-status");
+const marketsListEl = document.getElementById("markets-list");
+const todoNotionStatusEl = document.getElementById("todo-notion-status");
+const todoNotionListEl = document.getElementById("todo-notion-list");
+const todoTaskEl = document.getElementById("todo-task");
+const todoDueEl = document.getElementById("todo-due");
+const todoNotesEl = document.getElementById("todo-notes");
+const todoAddBtn = document.getElementById("todo-add");
+const todoToggleBtn = document.getElementById("todo-toggle");
+const todoFormEl = document.querySelector(".todo-form");
 const pomodoroTimerEl = document.getElementById("pomodoro-timer");
 const pomodoroStartBtn = document.getElementById("pomodoro-start");
 const pomodoroPauseBtn = document.getElementById("pomodoro-pause");
+const pomodoroResumeBtn = document.getElementById("pomodoro-resume");
 const pomodoroResetBtn = document.getElementById("pomodoro-reset");
 const widgetSections = Array.from(document.querySelectorAll("[data-widget]"));
-const focusData = { events: [], todos: [] };
 let extracted = null;
 let pomodoroInterval = null;
 let pomodoroMode = "work";
@@ -35,6 +38,17 @@ function formatEventTime(ev) {
   if (!start) return "";
   if (ev.start.length === 10) return start.toLocaleDateString();
   return start.toLocaleString();
+}
+
+function formatDateDisplay(input) {
+  if (!input) return "";
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return input;
+  return d.toLocaleDateString("fr-FR", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+  });
 }
 
 function formatTimeLeft(seconds) {
@@ -75,13 +89,67 @@ function resetPomodoro() {
   updatePomodoroDisplay();
 }
 
+function setFocusButtons(state) {
+  if (!pomodoroStartBtn || !pomodoroPauseBtn || !pomodoroResumeBtn || !pomodoroResetBtn) return;
+  if (state === "running") {
+    pomodoroStartBtn.classList.add("hidden");
+    pomodoroPauseBtn.classList.remove("hidden");
+    pomodoroResumeBtn.classList.add("hidden");
+    pomodoroResetBtn.classList.add("hidden");
+    return;
+  }
+  if (state === "paused") {
+    pomodoroStartBtn.classList.add("hidden");
+    pomodoroPauseBtn.classList.add("hidden");
+    pomodoroResumeBtn.classList.remove("hidden");
+    pomodoroResetBtn.classList.remove("hidden");
+    return;
+  }
+  pomodoroStartBtn.classList.remove("hidden");
+  pomodoroPauseBtn.classList.add("hidden");
+  pomodoroResumeBtn.classList.add("hidden");
+  pomodoroResetBtn.classList.add("hidden");
+}
+
 function applyWidgetPreferences() {
   chrome.storage.local.get(["dashboardWidgets"], (data) => {
     const prefs = data.dashboardWidgets || {};
+    const keys = Object.keys(prefs);
+    const allFalse = keys.length > 0 && keys.every((k) => prefs[k] === false);
+    if (keys.length === 0 || allFalse) {
+      const defaults = {
+        events: true,
+        add: true,
+        news: true,
+        markets: true,
+        todoNotion: true,
+        focusMode: true,
+      };
+      chrome.storage.local.set({ dashboardWidgets: defaults });
+      widgetSections.forEach((section) => {
+        section.style.display = "";
+      });
+      return;
+    }
+    const getPref = (key) => {
+      if (key === "markets") {
+        if (prefs.markets === false || prefs.timeline === false) return false;
+        if (prefs.markets === true || prefs.timeline === true) return true;
+        return undefined;
+      }
+      if (key === "focus-mode") {
+        if (prefs.focus === false || prefs.focusMode === false) return false;
+        if (prefs.focus === true || prefs.focusMode === true) return true;
+        return undefined;
+      }
+      if (key === "todo-notion") return prefs.todoNotion;
+      return prefs[key];
+    };
     widgetSections.forEach((section) => {
       const key = section.getAttribute("data-widget");
       if (!key) return;
-      if (prefs[key] === false) {
+      const prefValue = getPref(key);
+      if (prefValue === false) {
         section.style.display = "none";
       } else {
         section.style.display = "";
@@ -236,65 +304,7 @@ function renderEvents(items) {
   items.forEach((ev) => eventsEl.appendChild(makeEventChip(ev)));
 }
 
-function renderFocus(items) {
-  focusEl.innerHTML = "";
-  if (!items || items.length === 0) {
-    focusStatusEl.textContent = "Rien de critique aujourd'hui.";
-    return;
-  }
-  focusStatusEl.textContent = "";
-  items.forEach((item) => {
-    const row = document.createElement("div");
-    row.className = "event-chip";
-    const title = document.createElement("div");
-    title.className = "event-title";
-    title.textContent = item.title || "Action";
-    const meta = document.createElement("div");
-    meta.className = "event-meta";
-    meta.textContent = item.meta || "";
-    row.appendChild(title);
-    if (meta.textContent) row.appendChild(meta);
-    row.tabIndex = 0;
-    if (item.link) {
-      row.addEventListener("click", () => {
-        window.open(item.link, "_blank", "noreferrer");
-      });
-      row.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") window.open(item.link, "_blank", "noreferrer");
-      });
-    }
-    focusEl.appendChild(row);
-  });
-}
-
-function renderTodo(items) {
-  todoEl.innerHTML = "";
-  if (!items || items.length === 0) {
-    todoStatusEl.textContent = "Aucun stage a faire.";
-    return;
-  }
-  todoStatusEl.textContent = "";
-  items.forEach((item) => {
-    const row = document.createElement("div");
-    row.className = "event-chip";
-    const title = document.createElement("div");
-    title.className = "event-title";
-    title.textContent = normalizeText(
-      [item.company, item.title].filter(Boolean).join(" - ") || "Sans titre"
-    );
-    row.appendChild(title);
-    row.tabIndex = 0;
-    if (item.url) {
-      row.addEventListener("click", () => {
-        window.open(item.url, "_blank", "noreferrer");
-      });
-      row.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") window.open(item.url, "_blank", "noreferrer");
-      });
-    }
-    todoEl.appendChild(row);
-  });
-}
+// Stage todo list removed from dashboard.
 
 function renderNews(items) {
   newsEl.innerHTML = "";
@@ -303,7 +313,7 @@ function renderNews(items) {
     return;
   }
   newsStatusEl.textContent = "";
-  items.slice(0, 5).forEach((item) => {
+  items.forEach((item) => {
     const row = document.createElement("div");
     row.className = "event-chip";
     const title = document.createElement("div");
@@ -323,42 +333,200 @@ function renderNews(items) {
   });
 }
 
-function renderTimeline(items) {
-  if (!timelineListEl) return;
-  timelineListEl.innerHTML = "";
-  if (!items || items.length === 0) {
-    if (timelineStatusEl) timelineStatusEl.textContent = "Aucun élément pour aujourd'hui.";
+function renderNotionTodos(items) {
+  if (!todoNotionListEl) return;
+  todoNotionListEl.innerHTML = "";
+  const sorted = (items || [])
+    .slice()
+    .sort((a, b) => new Date(a.dueDate || 0) - new Date(b.dueDate || 0));
+  if (!sorted || sorted.length === 0) {
+    if (todoNotionStatusEl) todoNotionStatusEl.textContent = "Aucune tâche.";
     return;
   }
-  if (timelineStatusEl) timelineStatusEl.textContent = "";
-  items.forEach((item) => {
+  if (todoNotionStatusEl) todoNotionStatusEl.textContent = "";
+
+  sorted.forEach((item) => {
     const row = document.createElement("div");
-    row.className = "timeline-item";
-    const dot = document.createElement("div");
-    dot.className = "timeline-dot";
-    dot.style.background = item.color || "";
-    row.appendChild(dot);
-    const content = document.createElement("div");
+    row.className = "event-chip";
     const title = document.createElement("div");
-    title.className = "timeline-title";
-    title.textContent = item.title || "Élément";
-    const meta = document.createElement("div");
-    meta.className = "timeline-meta";
-    meta.textContent = item.meta || "";
-    content.appendChild(title);
-    if (meta.textContent) content.appendChild(meta);
-    row.appendChild(content);
-    if (item.link) {
-      row.addEventListener("click", () => window.open(item.link, "_blank", "noreferrer"));
-      row.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") window.open(item.link, "_blank", "noreferrer");
-      });
-      row.tabIndex = 0;
+    title.className = "event-title";
+    title.textContent = normalizeText(item.task || "Tâche");
+    row.appendChild(title);
+    if (item.dueDate) {
+      const due = new Date(item.dueDate);
+      const days = Math.ceil((due.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      const badge = document.createElement("div");
+      badge.className = "due-badge";
+      if (days <= 2) badge.classList.add("soon");
+      else if (days <= 7) badge.classList.add("mid");
+      badge.textContent = `Deadline: ${formatDateDisplay(item.dueDate)}`;
+      row.appendChild(badge);
+    } else if (item.status) {
+      const meta = document.createElement("div");
+      meta.className = "event-meta";
+      meta.textContent = item.status || "";
+      row.appendChild(meta);
     }
-    timelineListEl.appendChild(row);
+    row.tabIndex = 0;
+
+    const doneBtn = document.createElement("button");
+    doneBtn.className = "btn secondary";
+    doneBtn.style.marginTop = "6px";
+    doneBtn.textContent = "Marquer Done";
+    doneBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      chrome.runtime.sendMessage(
+        { type: "UPDATE_TODO_NOTION", payload: { id: item.id, status: "Done" } },
+        () => loadNotionTodos()
+      );
+    });
+    row.appendChild(doneBtn);
+
+    todoNotionListEl.appendChild(row);
   });
 }
 
+
+const HOME_MARKET_ITEMS = [
+  { label: "CAC 40", symbol: "^FCHI" },
+  { label: "EURO STOXX 600", symbol: "^STOXX" },
+  { label: "DAX", symbol: "^GDAXI" },
+  { label: "FTSE 100", symbol: "^FTSE" },
+  { label: "IBEX 35", symbol: "^IBEX" },
+  { label: "AEX", symbol: "^AEX" },
+  { label: "SMI", symbol: "^SSMI" },
+  { label: "STOXX 50", symbol: "^STOXX50E" },
+  { label: "S&P 500", symbol: "^GSPC" },
+  { label: "NASDAQ", symbol: "^IXIC" },
+  { label: "DOW", symbol: "^DJI" },
+  { label: "Russell 2000", symbol: "^RUT" },
+  { label: "NYSE Composite", symbol: "^NYA" },
+  { label: "VIX", symbol: "^VIX" },
+  { label: "Brent", symbol: "BZ=F" },
+  { label: "WTI", symbol: "CL=F" },
+  { label: "Or", symbol: "GC=F" },
+  { label: "Argent", symbol: "SI=F" },
+  { label: "US 10Y", symbol: "^TNX" },
+  { label: "US 30Y", symbol: "^TYX" },
+  { label: "FR 10Y", symbol: "^FR10Y" },
+  { label: "EUR/USD", symbol: "EURUSD=X", digits: 4 },
+  { label: "USD/CHF", symbol: "USDCHF=X", digits: 4 },
+  { label: "USD/CNH", symbol: "USDCNH=X", digits: 4 },
+  { label: "GBP/EUR", symbol: "GBPEUR=X", digits: 4 },
+  { label: "GBP/USD", symbol: "GBPUSD=X", digits: 4 },
+  { label: "USD/JPY", symbol: "USDJPY=X", digits: 3 },
+  { label: "BTC", symbol: "BTC-USD", digits: 0 },
+  { label: "ETH", symbol: "ETH-USD", digits: 0 },
+];
+
+function formatMarketValue(value) {
+  if (value === null || value === undefined || value === "") return "N/D";
+  if (Number.isFinite(value)) return value.toLocaleString();
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toLocaleString() : String(value);
+}
+
+function formatWithDigits(value, digits) {
+  if (!Number.isFinite(value)) return formatMarketValue(value);
+  if (!Number.isFinite(digits)) return formatMarketValue(value);
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function formatDelta(value) {
+  if (!Number.isFinite(value)) return "N/D";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+function renderMarketsList(bySymbol) {
+  if (!marketsListEl) return;
+  marketsListEl.innerHTML = "";
+  const items = HOME_MARKET_ITEMS.map((item) => {
+    const quote = bySymbol[item.symbol] || {};
+    return {
+      ...item,
+      price: quote.price,
+      changePercent: quote.changePercent,
+    };
+  });
+  chrome.storage?.local?.set?.({
+    marketsCache: { at: Date.now(), items },
+  });
+  if (items.length === 0) {
+    if (marketsStatusEl) marketsStatusEl.textContent = "Marches indisponibles.";
+    return;
+  }
+  if (marketsStatusEl) marketsStatusEl.textContent = "";
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "market-row";
+    const left = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "market-title";
+    title.textContent = item.label;
+    const meta = document.createElement("div");
+    meta.className = "market-meta";
+    meta.textContent = formatWithDigits(item.price, item.digits);
+    left.appendChild(title);
+    left.appendChild(meta);
+
+    const delta = document.createElement("div");
+    delta.className = "market-delta";
+    const change = item.changePercent;
+    delta.textContent = formatDelta(change);
+    if (Number.isFinite(change)) {
+      if (change > 0) delta.classList.add("up");
+      else if (change < 0) delta.classList.add("down");
+      else delta.classList.add("flat");
+    } else {
+      delta.classList.add("flat");
+    }
+
+    row.appendChild(left);
+    row.appendChild(delta);
+    marketsListEl.appendChild(row);
+  });
+}
+
+function loadMarketsList() {
+  if (marketsStatusEl) marketsStatusEl.textContent = "Chargement...";
+  chrome.storage?.local?.get?.(["marketsCache"], (cached) => {
+    const cache = cached?.marketsCache;
+    if (cache?.items?.length) {
+      renderMarketsList(
+        cache.items.reduce((acc, item) => {
+          acc[item.symbol] = { price: item.price, changePercent: item.changePercent };
+          return acc;
+        }, {})
+      );
+    }
+  });
+  const yahooSymbols = Array.from(
+    new Set(HOME_MARKET_ITEMS.map((i) => i.symbol).filter((s) => s !== "^FR10Y"))
+  );
+  chrome.runtime.sendMessage(
+    { type: "GET_YAHOO_QUOTES", payload: { symbols: yahooSymbols, force: false } },
+    (res) => {
+      if (!res?.ok) {
+        if (marketsStatusEl) marketsStatusEl.textContent = "Marches indisponibles.";
+        return;
+      }
+      const bySymbol = res.data?.bySymbol || {};
+      chrome.runtime.sendMessage(
+        { type: "GET_ECB_FR10Y", payload: { force: true } },
+        (ecbRes) => {
+          if (ecbRes?.ok && Number.isFinite(ecbRes.data?.value)) {
+            bySymbol["^FR10Y"] = { symbol: "^FR10Y", price: ecbRes.data.value };
+          }
+          renderMarketsList(bySymbol);
+        }
+      );
+    }
+  );
+}
 function loadEvents() {
   const now = new Date();
   const timeMin = now.toISOString();
@@ -388,126 +556,6 @@ function loadEvents() {
   });
 }
 
-function loadFocus() {
-  focusStatusEl.textContent = "Chargement...";
-  const now = new Date();
-  const timeMin = now.toISOString();
-  const timeMax = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-
-  chrome.storage.local.get(["gcalSelectedCalendars"], (data) => {
-    const ids = Array.isArray(data.gcalSelectedCalendars) ? data.gcalSelectedCalendars : [];
-    chrome.runtime.sendMessage(
-      { type: "GCAL_LOAD_EVENTS", payload: { timeMin, timeMax, calendarIds: ids } },
-      (res) => {
-        if (!res?.ok) {
-          focusStatusEl.textContent = "Non connecte ou aucune donnee.";
-          return;
-        }
-        focusData.events = (res.events || [])
-          .filter((ev) => Array.isArray(ev.tags) && ev.tags.includes("important"))
-          .slice(0, 3)
-          .map((ev) => ({
-            title: normalizeText(ev.summary || "Evenement important"),
-            meta: formatEventTime(ev),
-            link: ev.meetingLink || ev.htmlLink || "",
-            linkLabel: ev.meetingLink ? "Rejoindre" : "Ouvrir",
-          }));
-        renderFocus([...focusData.events, ...focusData.todos]);
-      }
-    );
-  });
-
-  chrome.runtime.sendMessage({ type: "GET_TODO_STAGES" }, (res) => {
-    if (!res?.ok) return;
-    focusData.todos = (res.items || [])
-      .slice(0, 2)
-      .map((item) => ({
-        title: normalizeText([item.company, item.title].filter(Boolean).join(" - ")),
-        meta: "Stage a faire",
-        link: item.url || "",
-        linkLabel: "Ouvrir",
-      }));
-    renderFocus([...focusData.events, ...focusData.todos]);
-  });
-}
-
-function loadTimeline() {
-  if (timelineStatusEl) timelineStatusEl.textContent = "Chargement...";
-  const now = new Date();
-  const timeMin = now.toISOString();
-  const timeMax = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-
-  chrome.storage.local.get(["gcalSelectedCalendars"], (data) => {
-    const ids = Array.isArray(data.gcalSelectedCalendars) ? data.gcalSelectedCalendars : [];
-    chrome.runtime.sendMessage(
-      { type: "GCAL_LOAD_EVENTS", payload: { timeMin, timeMax, calendarIds: ids } },
-      (res) => {
-        const items = [];
-        if (res?.ok) {
-          (res.events || [])
-            .filter((ev) => Array.isArray(ev.tags) && ev.tags.includes("important"))
-            .forEach((ev) => {
-              items.push({
-                title: normalizeText(ev.summary || "Événement important"),
-                meta: formatEventTime(ev),
-                time: ev.start ? new Date(ev.start).getTime() : 0,
-                link: ev.meetingLink || ev.htmlLink || "",
-                color: "#38bdf8",
-              });
-            });
-        }
-
-        chrome.runtime.sendMessage({ type: "GET_TODO_STAGES" }, (todoRes) => {
-          if (todoRes?.ok) {
-            (todoRes.items || []).slice(0, 5).forEach((item) => {
-              items.push({
-                title: normalizeText([item.company, item.title].filter(Boolean).join(" - ")),
-                meta: "Stage à faire",
-                time: now.getTime() + 6 * 60 * 60 * 1000,
-                link: item.url || "",
-                color: "#22c55e",
-              });
-            });
-          }
-
-          chrome.runtime.sendMessage({ type: "GET_STAGE_DEADLINES" }, (deadRes) => {
-            if (deadRes?.ok) {
-              (deadRes.items || []).slice(0, 6).forEach((item) => {
-                const t = item.closeDate ? new Date(item.closeDate).getTime() : 0;
-                items.push({
-                  title: normalizeText([item.company, item.title].filter(Boolean).join(" - ")),
-                  meta: `Deadline: ${item.closeDate || ""}`,
-                  time: t,
-                  link: item.url || "",
-                  color: "#f59e0b",
-                });
-              });
-            }
-
-            items.sort((a, b) => (a.time || 0) - (b.time || 0));
-            renderTimeline(items);
-          });
-        });
-      }
-    );
-  });
-}
-
-function loadTodo() {
-  todoStatusEl.textContent = "Chargement...";
-  chrome.runtime.sendMessage({ type: "GET_TODO_STAGES" }, (res) => {
-    if (chrome.runtime.lastError) {
-      todoStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-      return;
-    }
-    if (!res?.ok) {
-      todoStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
-      return;
-    }
-    renderTodo(res.items || []);
-  });
-}
-
 function loadNews() {
   newsStatusEl.textContent = "Chargement...";
   chrome.runtime.sendMessage({ type: "GET_YAHOO_NEWS" }, (res) => {
@@ -523,28 +571,104 @@ function loadNews() {
   });
 }
 
-chrome.storage.local.get(["focusModeEnabled", "pomodoroWork", "pomodoroBreak"], (data) => {
-  pomodoroWorkMinutes = Number.parseInt(data.pomodoroWork || "25", 10);
-  pomodoroBreakMinutes = Number.parseInt(data.pomodoroBreak || "5", 10);
-  if (focusSwitchEl) focusSwitchEl.checked = data.focusModeEnabled === true;
-  resetPomodoro();
-});
-
-if (focusSwitchEl) {
-  focusSwitchEl.addEventListener("change", async () => {
-    const enabled = !!focusSwitchEl.checked;
-    await chrome.storage.local.set({ focusModeEnabled: enabled, urlBlockerEnabled: enabled });
-    chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
+function loadNotionTodos() {
+  if (todoNotionStatusEl) todoNotionStatusEl.textContent = "Chargement...";
+  chrome.runtime.sendMessage({ type: "LIST_TODO_NOTION" }, (res) => {
+    if (chrome.runtime.lastError) {
+      if (todoNotionStatusEl) {
+        todoNotionStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
+      }
+      renderNotionTodos([]);
+      return;
+    }
+    if (!res?.ok) {
+      if (todoNotionStatusEl) {
+        todoNotionStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+      }
+      renderNotionTodos([]);
+      return;
+    }
+    renderNotionTodos(res.items || []);
   });
 }
 
-if (pomodoroStartBtn) pomodoroStartBtn.addEventListener("click", startPomodoro);
-if (pomodoroPauseBtn) pomodoroPauseBtn.addEventListener("click", pausePomodoro);
-if (pomodoroResetBtn) pomodoroResetBtn.addEventListener("click", resetPomodoro);
+chrome.storage.local.get(["pomodoroWork", "pomodoroBreak"], (data) => {
+  pomodoroWorkMinutes = Number.parseInt(data.pomodoroWork || "25", 10);
+  pomodoroBreakMinutes = Number.parseInt(data.pomodoroBreak || "5", 10);
+  resetPomodoro();
+  setFocusButtons("idle");
+});
+
+if (pomodoroStartBtn) {
+  pomodoroStartBtn.addEventListener("click", async () => {
+    await chrome.storage.local.set({ focusModeEnabled: true, urlBlockerEnabled: true });
+    chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
+    startPomodoro();
+    setFocusButtons("running");
+  });
+}
+
+if (pomodoroPauseBtn) {
+  pomodoroPauseBtn.addEventListener("click", () => {
+    pausePomodoro();
+    setFocusButtons("paused");
+  });
+}
+
+if (pomodoroResumeBtn) {
+  pomodoroResumeBtn.addEventListener("click", () => {
+    startPomodoro();
+    setFocusButtons("running");
+  });
+}
+
+if (pomodoroResetBtn) {
+  pomodoroResetBtn.addEventListener("click", async () => {
+    pausePomodoro();
+    resetPomodoro();
+    await chrome.storage.local.set({ focusModeEnabled: false, urlBlockerEnabled: false });
+    chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
+    setFocusButtons("idle");
+  });
+}
+
+if (todoAddBtn) {
+  todoAddBtn.addEventListener("click", () => {
+    const task = normalizeText(todoTaskEl?.value || "");
+    if (!task) return;
+    const payload = {
+      task,
+      dueDate: todoDueEl?.value || "",
+      notes: normalizeText(todoNotesEl?.value || ""),
+      status: "Not Started",
+    };
+    chrome.runtime.sendMessage({ type: "CREATE_TODO_NOTION", payload }, (res) => {
+      if (todoNotionStatusEl) {
+        todoNotionStatusEl.textContent = res?.ok ? "Tâche créée." : `Erreur: ${res?.error || "inconnue"}`;
+      }
+      if (res?.ok) {
+        if (todoTaskEl) todoTaskEl.value = "";
+        if (todoDueEl) todoDueEl.value = "";
+        if (todoNotesEl) todoNotesEl.value = "";
+        loadNotionTodos();
+      }
+    });
+  });
+}
+
+if (todoToggleBtn && todoFormEl) {
+  todoFormEl.classList.add("hidden");
+  todoToggleBtn.addEventListener("click", () => {
+    todoFormEl.classList.toggle("hidden");
+  });
+}
 
 applyWidgetPreferences();
 loadEvents();
-loadFocus();
-loadTodo();
 loadNews();
-loadTimeline();
+loadMarketsList();
+loadNotionTodos();
+
+
+
+

@@ -6,6 +6,8 @@ const existingEl = document.getElementById("existing");
 const columnsEl = document.getElementById("columns");
 const bdfApiKeyEl = document.getElementById("bdf-api-key");
 const googlePlacesApiKeyEl = document.getElementById("google-places-api-key");
+const todoDbEl = document.getElementById("todo-db");
+const todoStatusEl = document.getElementById("todo-status");
 const gcalLoginBtn = document.getElementById("gcal-login");
 const gcalLogoutBtn = document.getElementById("gcal-logout");
 const gcalStatusEl = document.getElementById("gcal-status");
@@ -20,7 +22,8 @@ const widgetAddEl = document.getElementById("widget-add");
 const widgetFocusEl = document.getElementById("widget-focus");
 const widgetTodoEl = document.getElementById("widget-todo");
 const widgetNewsEl = document.getElementById("widget-news");
-const widgetTimelineEl = document.getElementById("widget-timeline");
+const widgetMarketsEl = document.getElementById("widget-markets");
+const widgetTodoNotionEl = document.getElementById("widget-todo-notion");
 const widgetSaveBtn = document.getElementById("widget-save");
 const widgetStatusEl = document.getElementById("widget-status");
 const focusEnabledEl = document.getElementById("focus-enabled");
@@ -75,6 +78,9 @@ chrome.storage.sync.get(["notionToken", "notionDbId"], (v) => {
   tokenEl.value = v.notionToken || "";
   dbEl.value = v.notionDbId || "";
 });
+chrome.storage.sync.get(["notionTodoDbId"], (v) => {
+  if (todoDbEl) todoDbEl.value = v.notionTodoDbId || "";
+});
 chrome.storage.local.get(["bdfApiKey"], (v) => {
   if (bdfApiKeyEl) bdfApiKeyEl.value = v.bdfApiKey || "";
 });
@@ -116,7 +122,8 @@ chrome.storage.local.get(["dashboardWidgets", "focusModeEnabled", "pomodoroWork"
   if (widgetFocusEl) widgetFocusEl.checked = widgets.focus !== false;
   if (widgetTodoEl) widgetTodoEl.checked = widgets.todo !== false;
   if (widgetNewsEl) widgetNewsEl.checked = widgets.news !== false;
-  if (widgetTimelineEl) widgetTimelineEl.checked = widgets.timeline !== false;
+  if (widgetMarketsEl) widgetMarketsEl.checked = widgets.markets !== false;
+  if (widgetTodoNotionEl) widgetTodoNotionEl.checked = widgets.todoNotion !== false;
   if (focusEnabledEl) focusEnabledEl.checked = v.focusModeEnabled === true;
   if (pomodoroWorkEl) pomodoroWorkEl.value = String(v.pomodoroWork || 25);
   if (pomodoroBreakEl) pomodoroBreakEl.value = String(v.pomodoroBreak || 5);
@@ -161,18 +168,26 @@ document.getElementById("save").addEventListener("click", async () => {
     statusEl.textContent = "Error: invalid database ID or URL.";
     return;
   }
+  const normalizedTodoDbId = normalizeDbId(todoDbEl?.value || "");
+  if (todoDbEl && !normalizedTodoDbId) {
+    if (todoStatusEl) todoStatusEl.textContent = "Error: invalid Todo DB ID or URL.";
+    return;
+  }
 
   await chrome.storage.sync.set({
     notionToken: tokenEl.value.trim(),
     notionDbId: normalizedDbId,
+    ...(normalizedTodoDbId ? { notionTodoDbId: normalizedTodoDbId } : {}),
   });
   const bdfApiKey = bdfApiKeyEl?.value?.trim() || "";
   const googlePlacesApiKey = googlePlacesApiKeyEl?.value?.trim() || "";
   await chrome.storage.local.set({ bdfApiKey, googlePlacesApiKey });
 
   dbEl.value = normalizedDbId;
+  if (todoDbEl && normalizedTodoDbId) todoDbEl.value = normalizedTodoDbId;
   statusEl.textContent = "OK. Saved.";
 });
+
 
 if (urlBlockerSaveBtn) {
   urlBlockerSaveBtn.addEventListener("click", async () => {
@@ -207,7 +222,8 @@ if (widgetSaveBtn) {
       focus: !!widgetFocusEl?.checked,
       todo: !!widgetTodoEl?.checked,
       news: !!widgetNewsEl?.checked,
-      timeline: !!widgetTimelineEl?.checked,
+      markets: !!widgetMarketsEl?.checked,
+      todoNotion: !!widgetTodoNotionEl?.checked,
     };
     await chrome.storage.local.set({ dashboardWidgets });
     if (widgetStatusEl) widgetStatusEl.textContent = "Widgets sauvegardés.";
@@ -276,6 +292,19 @@ if (checkBtn) {
       columnsEl.textContent = "Aucune colonne chargee.";
     }
     refreshDiagnostics(false);
+  });
+  chrome.runtime.sendMessage({ type: "CHECK_TODO_DB" }, (res) => {
+    if (!todoStatusEl) return;
+    if (chrome.runtime.lastError) {
+      todoStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
+      return;
+    }
+    if (res?.ok) {
+      const title = res.dbTitle ? ` (${res.dbTitle})` : "";
+      todoStatusEl.textContent = `Todo DB OK${title}.`;
+    } else {
+      todoStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+    }
   });
   });
 }
@@ -542,7 +571,7 @@ loadTagRules();
 
 function loadDeadlinePrefs() {
   chrome.runtime.sendMessage({ type: "DEADLINE_GET_PREFS" }, (res) => {
-    const prefs = res?.prefs || { enabled: true, offsets: [24, 48, 168] };
+    const prefs = res?.prefs || { enabled: true, offsets: [24, 72, 168] };
     if (deadlineEnabledEl) deadlineEnabledEl.checked = !!prefs.enabled;
     if (deadlineOffsetsEl) deadlineOffsetsEl.value = (prefs.offsets || []).join(", ");
   });
@@ -555,7 +584,7 @@ if (deadlineSaveBtn) {
       .split(",")
       .map((s) => Number.parseInt(s.trim(), 10))
       .filter((n) => Number.isFinite(n) && n > 0);
-    const prefs = { enabled, offsets: offsets.length ? offsets : [24, 48, 168] };
+    const prefs = { enabled, offsets: offsets.length ? offsets : [24, 72, 168] };
     chrome.runtime.sendMessage({ type: "DEADLINE_SET_PREFS", payload: prefs }, () => {
       if (deadlineStatusEl) deadlineStatusEl.textContent = "Preferences enregistrees.";
     });
@@ -742,6 +771,7 @@ async function exportConfig() {
   const syncData = await chrome.storage.sync.get([
     "notionToken",
     "notionDbId",
+    "notionTodoDbId",
     "notionFieldMap",
   ]);
   const localData = await chrome.storage.local.get([
@@ -801,8 +831,10 @@ if (importBtn) {
         widgetFocusEl.checked = widgets.focus !== false;
         widgetTodoEl.checked = widgets.todo !== false;
         widgetNewsEl.checked = widgets.news !== false;
-        widgetTimelineEl.checked = widgets.timeline !== false;
+        widgetMarketsEl.checked = widgets.markets !== false;
+        widgetTodoNotionEl.checked = widgets.todoNotion !== false;
       }
+      if (todoDbEl) todoDbEl.value = parsed?.sync?.notionTodoDbId || "";
       if (focusEnabledEl) focusEnabledEl.checked = parsed?.local?.focusModeEnabled === true;
       if (pomodoroWorkEl) pomodoroWorkEl.value = String(parsed?.local?.pomodoroWork || 25);
       if (pomodoroBreakEl) pomodoroBreakEl.value = String(parsed?.local?.pomodoroBreak || 5);

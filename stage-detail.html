@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Details du stage</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+      :root {
+        --bg: #0b1220;
+        --surface: #0f172a;
+        --surface-2: #0b1324;
+        --accent: #38bdf8;
+        --accent-2: #0a84ff;
+        --muted: #94a3b8;
+        --text: #e2e8f0;
+        --border: rgba(148, 163, 184, 0.2);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 28px;
+        background: radial-gradient(120% 120% at 0% 0%, #0f1b33 0%, #0b1220 55%, #0a1020 100%);
+        color: var(--text);
+        font-family: "Space Grotesk", system-ui, sans-serif;
+      }
+      .card {
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(11, 19, 36, 0.95));
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 20px 22px;
+        box-shadow: 0 22px 50px rgba(2, 6, 23, 0.55);
+      }
+      h1 { margin: 0 0 8px; font-size: 24px; letter-spacing: 0.01em; }
+      .title-meta {
+        font-size: 16px;
+        color: var(--text);
+        font-weight: 700;
+        margin-top: 2px;
+        margin-bottom: 8px;
+      }
+      .subtitle {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 12px;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        gap: 12px;
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 10px;
+        padding: 8px 10px;
+        border-radius: 12px;
+        background: rgba(11, 19, 36, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+      }
+      .row span { color: var(--text); }
+      .cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        background: rgba(10, 132, 255, 0.18);
+        color: var(--text);
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .cta:hover {
+        border-color: rgba(56, 189, 248, 0.75);
+        background: rgba(10, 132, 255, 0.28);
+      }
+      .cta.disabled {
+        opacity: 0.5;
+        pointer-events: none;
+      }
+      .cta-wrap {
+        display: flex;
+        justify-content: center;
+        margin-top: 16px;
+      }
+      .notes-box {
+        width: 100%;
+        min-height: 110px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.7);
+        color: var(--text);
+        font-size: 13px;
+        resize: vertical;
+      }
+      .notes-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 6px;
+      }
+      .btn {
+        padding: 8px 14px;
+        border-radius: 12px;
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        background: rgba(56, 189, 248, 0.18);
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .note-status {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .prep-section {
+        margin-top: 16px;
+        padding: 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        background: rgba(11, 19, 36, 0.7);
+      }
+      .prep-title {
+        font-size: 14px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+      .prep-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 6px 0;
+        font-size: 13px;
+      }
+      .prep-input {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.7);
+        color: var(--text);
+        font-size: 13px;
+      }
+      .prep-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .load-status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <section class="card">
+      <h1 id="title">Stage</h1>
+      <div class="title-meta" id="company">-</div>
+      <div class="subtitle">Détails du stage</div>
+      <div class="row"><div>Type</div><span id="type">-</span></div>
+      <div class="row"><div>Status</div><span id="status">-</span></div>
+      <div class="row"><div>Deadline</div><span id="deadline">-</span></div>
+      <div class="row"><div>Lieu</div><span id="location">-</span></div>
+      <div class="row"><div>Role</div><span id="role">-</span></div>
+      <div class="row"><div>Ouverture</div><span id="open-date">-</span></div>
+      <div class="row"><div>Candidature</div><span id="application-date">-</span></div>
+      <div class="row"><div>Start month</div><span id="start-month">-</span></div>
+      <div class="row">
+        <div>Notes</div>
+        <div>
+          <textarea id="notes" class="notes-box" placeholder="Ajouter des notes..."></textarea>
+          <div class="notes-actions">
+            <button id="notes-save" class="btn" type="button">Enregistrer</button>
+            <div id="notes-status" class="note-status"></div>
+          </div>
+        </div>
+      </div>
+      <div class="prep-section">
+        <div class="prep-title">Préparation entretien</div>
+        <label class="prep-row"><input type="checkbox" id="prep-cv" /> CV envoyé</label>
+        <label class="prep-row"><input type="checkbox" id="prep-follow" /> Follow-up envoyé</label>
+        <div class="prep-row">
+          <input id="prep-reminder" class="prep-input" type="datetime-local" />
+        </div>
+        <div class="prep-row">
+          <textarea id="prep-notes" class="notes-box" placeholder="Notes entretien..."></textarea>
+        </div>
+        <div class="prep-actions">
+          <button id="prep-save" class="btn" type="button">Sauver</button>
+          <div id="prep-status" class="note-status"></div>
+        </div>
+      </div>
+      <div class="cta-wrap">
+        <a id="link" class="cta" href="#" target="_blank" rel="noreferrer">Ouvrir l'offre</a>
+      </div>
+      <div id="load-status" class="load-status"></div>
+    </section>
+
+    <script src="stage-detail.js"></script>
+  </body>
+</html>
