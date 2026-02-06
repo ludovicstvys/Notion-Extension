@@ -74,18 +74,25 @@ const mapFields = {
   type: document.getElementById("map-type"),
 };
 
+const DEFAULTS = self?.EXTENSION_DEFAULTS || {};
+const SYNC_DEFAULTS = DEFAULTS.sync || {};
+const LOCAL_DEFAULTS = DEFAULTS.local || {};
+
 chrome.storage.sync.get(["notionToken", "notionDbId"], (v) => {
-  tokenEl.value = v.notionToken || "";
-  dbEl.value = v.notionDbId || "";
+  tokenEl.value = v.notionToken ?? SYNC_DEFAULTS.notionToken ?? "";
+  dbEl.value = v.notionDbId ?? SYNC_DEFAULTS.notionDbId ?? "";
 });
 chrome.storage.sync.get(["notionTodoDbId"], (v) => {
-  if (todoDbEl) todoDbEl.value = v.notionTodoDbId || "";
+  if (todoDbEl) todoDbEl.value = v.notionTodoDbId ?? SYNC_DEFAULTS.notionTodoDbId ?? "";
 });
 chrome.storage.local.get(["bdfApiKey"], (v) => {
-  if (bdfApiKeyEl) bdfApiKeyEl.value = v.bdfApiKey || "";
+  if (bdfApiKeyEl) bdfApiKeyEl.value = v.bdfApiKey ?? LOCAL_DEFAULTS.bdfApiKey ?? "";
 });
 chrome.storage.local.get(["googlePlacesApiKey"], (v) => {
-  if (googlePlacesApiKeyEl) googlePlacesApiKeyEl.value = v.googlePlacesApiKey || "";
+  if (googlePlacesApiKeyEl) {
+    googlePlacesApiKeyEl.value =
+      v.googlePlacesApiKey ?? LOCAL_DEFAULTS.googlePlacesApiKey ?? "";
+  }
 });
 let urlBlockerRules = [];
 function renderUrlBlockerRules() {
@@ -111,12 +118,18 @@ function renderUrlBlockerRules() {
 }
 
 chrome.storage.local.get(["urlBlockerRules"], (v) => {
-  urlBlockerRules = Array.isArray(v.urlBlockerRules) ? v.urlBlockerRules : [];
+  if (Array.isArray(v.urlBlockerRules)) {
+    urlBlockerRules = v.urlBlockerRules;
+  } else if (Array.isArray(LOCAL_DEFAULTS.urlBlockerRules)) {
+    urlBlockerRules = LOCAL_DEFAULTS.urlBlockerRules;
+  } else {
+    urlBlockerRules = [];
+  }
   renderUrlBlockerRules();
 });
 
 chrome.storage.local.get(["dashboardWidgets", "focusModeEnabled", "pomodoroWork", "pomodoroBreak"], (v) => {
-  const widgets = v.dashboardWidgets || {};
+  const widgets = v.dashboardWidgets || LOCAL_DEFAULTS.dashboardWidgets || {};
   if (widgetEventsEl) widgetEventsEl.checked = widgets.events !== false;
   if (widgetAddEl) widgetAddEl.checked = widgets.add !== false;
   if (widgetFocusEl) widgetFocusEl.checked = widgets.focus !== false;
@@ -124,9 +137,19 @@ chrome.storage.local.get(["dashboardWidgets", "focusModeEnabled", "pomodoroWork"
   if (widgetNewsEl) widgetNewsEl.checked = widgets.news !== false;
   if (widgetMarketsEl) widgetMarketsEl.checked = widgets.markets !== false;
   if (widgetTodoNotionEl) widgetTodoNotionEl.checked = widgets.todoNotion !== false;
-  if (focusEnabledEl) focusEnabledEl.checked = v.focusModeEnabled === true;
-  if (pomodoroWorkEl) pomodoroWorkEl.value = String(v.pomodoroWork || 25);
-  if (pomodoroBreakEl) pomodoroBreakEl.value = String(v.pomodoroBreak || 5);
+  if (focusEnabledEl) {
+    focusEnabledEl.checked =
+      v.focusModeEnabled === true ||
+      (v.focusModeEnabled === undefined && LOCAL_DEFAULTS.focusModeEnabled === true);
+  }
+  if (pomodoroWorkEl) {
+    const fallback = LOCAL_DEFAULTS.pomodoroWork ?? 25;
+    pomodoroWorkEl.value = String(v.pomodoroWork ?? fallback);
+  }
+  if (pomodoroBreakEl) {
+    const fallback = LOCAL_DEFAULTS.pomodoroBreak ?? 5;
+    pomodoroBreakEl.value = String(v.pomodoroBreak ?? fallback);
+  }
 });
 
 function normalizeDbId(input) {
@@ -335,7 +358,8 @@ function setCalendarOptions(items) {
     gcalDefaultEl.appendChild(opt);
   });
   chrome.storage.local.get(["gcalDefaultCalendar"], (data) => {
-    gcalDefaultEl.value = data.gcalDefaultCalendar || "primary";
+    gcalDefaultEl.value =
+      data.gcalDefaultCalendar ?? LOCAL_DEFAULTS.gcalDefaultCalendar ?? "primary";
   });
 }
 
@@ -447,13 +471,19 @@ function setMapOptions(selectEl, columns) {
 function loadMappingUI(columns) {
   Object.values(mapFields).forEach((sel) => setMapOptions(sel, columns));
   chrome.storage.sync.get(["notionFieldMap"], (data) => {
-    const map = data.notionFieldMap || {};
+    const map =
+      data.notionFieldMap && Object.keys(data.notionFieldMap || {}).length
+        ? data.notionFieldMap
+        : (SYNC_DEFAULTS.notionFieldMap || {});
     Object.entries(mapFields).forEach(([key, sel]) => {
       if (sel) sel.value = map[key] || "";
     });
   });
   chrome.storage.sync.get(["notionStatusMap"], (data) => {
-    const smap = data.notionStatusMap || {};
+    const smap =
+      data.notionStatusMap && Object.keys(data.notionStatusMap || {}).length
+        ? data.notionStatusMap
+        : (SYNC_DEFAULTS.notionStatusMap || {});
     if (statusOpenEl) statusOpenEl.value = smap.open || "Ouvert";
     if (statusAppliedEl) statusAppliedEl.value = smap.applied || "Candidature envoyee";
   });
@@ -529,12 +559,14 @@ function loadTagRules() {
   chrome.storage.local.get(["autoTagRules"], (data) => {
     const rules = Array.isArray(data.autoTagRules) && data.autoTagRules.length
       ? data.autoTagRules
-      : [
-          { tag: "meeting", contains: ["meet.google.com", "zoom.us", "teams.microsoft.com"] },
-          { tag: "deadline", contains: ["deadline", "due", "date limite"] },
-          { tag: "entretien", contains: ["interview", "entretien"] },
-          { tag: "important", contains: ["urgent", "important"] },
-        ];
+      : Array.isArray(LOCAL_DEFAULTS.autoTagRules) && LOCAL_DEFAULTS.autoTagRules.length
+        ? LOCAL_DEFAULTS.autoTagRules
+        : [
+            { tag: "meeting", contains: ["meet.google.com", "zoom.us", "teams.microsoft.com"] },
+            { tag: "deadline", contains: ["deadline", "due", "date limite"] },
+            { tag: "entretien", contains: ["interview", "entretien"] },
+            { tag: "important", contains: ["urgent", "important"] },
+          ];
     rules.forEach((rule) => tagRulesEl.appendChild(buildTagRow(rule)));
   });
 }
@@ -571,7 +603,10 @@ loadTagRules();
 
 function loadDeadlinePrefs() {
   chrome.runtime.sendMessage({ type: "DEADLINE_GET_PREFS" }, (res) => {
-    const prefs = res?.prefs || { enabled: true, offsets: [24, 72, 168] };
+    const prefs =
+      res?.prefs ||
+      LOCAL_DEFAULTS.deadlinePrefs ||
+      { enabled: true, offsets: [24, 72, 168] };
     if (deadlineEnabledEl) deadlineEnabledEl.checked = !!prefs.enabled;
     if (deadlineOffsetsEl) deadlineOffsetsEl.value = (prefs.offsets || []).join(", ");
   });

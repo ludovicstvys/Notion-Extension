@@ -1,4 +1,11 @@
-﻿const NOTION_VERSION = "2022-06-28";
+try {
+  importScripts("config.js");
+} catch (_) {
+  // No defaults file present.
+}
+
+const EXTENSION_DEFAULTS = self?.EXTENSION_DEFAULTS || null;
+const NOTION_VERSION = "2022-06-28";
 const MAX_LIST_ROWS = 200;
 const GCAL_BASE = "https://www.googleapis.com/calendar/v3";
 const GCAL_EVENTS_MAX = 250;
@@ -45,6 +52,42 @@ try {
   }
 } catch (_) {
   // Ignore if side panel API is unavailable.
+}
+
+function buildSeedPayload(defaults, current) {
+  const payload = {};
+  if (!defaults || typeof defaults !== "object") return payload;
+  const hasOwn = Object.prototype.hasOwnProperty;
+  Object.keys(defaults).forEach((key) => {
+    if (!hasOwn.call(current, key) || current[key] === undefined) {
+      payload[key] = defaults[key];
+    }
+  });
+  return payload;
+}
+
+async function seedDefaultConfig() {
+  if (!EXTENSION_DEFAULTS) return;
+  const syncDefaults = EXTENSION_DEFAULTS.sync || {};
+  const localDefaults = EXTENSION_DEFAULTS.local || {};
+  const syncKeys = Object.keys(syncDefaults);
+  const localKeys = Object.keys(localDefaults);
+
+  if (syncKeys.length) {
+    const currentSync = await chrome.storage.sync.get(syncKeys);
+    const toSetSync = buildSeedPayload(syncDefaults, currentSync);
+    if (Object.keys(toSetSync).length) {
+      await chrome.storage.sync.set(toSetSync);
+    }
+  }
+
+  if (localKeys.length) {
+    const currentLocal = await chrome.storage.local.get(localKeys);
+    const toSetLocal = buildSeedPayload(localDefaults, currentLocal);
+    if (Object.keys(toSetLocal).length) {
+      await chrome.storage.local.set(toSetLocal);
+    }
+  }
 }
 
 try {
@@ -106,15 +149,15 @@ function friendlyMessage(code, fallback) {
     case "AUTH_REQUIRED":
       return "Authentification requise. Reconnecte ton compte Google.";
     case "NOTION_DB_NOT_FOUND":
-      return "Base Notion introuvable. VÃ©rifie l'ID et le partage.";
+      return "Base Notion introuvable. V??rifie l'ID et le partage.";
     case "NETWORK_ERROR":
-      return "Erreur rÃ©seau. VÃ©rifie ta connexion et rÃ©essaie.";
+      return "Erreur r??seau. V??rifie ta connexion et r??essaie.";
     case "HTTP_404":
       return "Ressource introuvable (404).";
     case "HTTP_429":
-      return "Trop de requÃªtes (429). RÃ©essaie dans quelques instants.";
+      return "Trop de requ??tes (429). R??essaie dans quelques instants.";
     case "HTTP_5XX":
-      return "Service indisponible cÃ´tÃ© serveur. RÃ©essaie plus tard.";
+      return "Service indisponible c??t?? serveur. R??essaie plus tard.";
     default:
       return fallback || "Une erreur inconnue est survenue.";
   }
@@ -287,7 +330,7 @@ async function notionFetch(token, path, method, body) {
   } catch (err) {
     if (err?.status === 404 && path.startsWith("databases/")) {
       throw makeError(
-        "Base Notion introuvable (vÃ©rifie l'ID et le partage).",
+        "Base Notion introuvable (v??rifie l'ID et le partage).",
         "NOTION_DB_NOT_FOUND",
         404,
         { path }
@@ -524,7 +567,7 @@ async function getGooglePlacesKey() {
   ]);
   const trimmed = String(key || "").trim();
   if (!trimmed) {
-    throw makeError("Clé Google Places manquante (Options).", "PLACES_KEY_MISSING");
+    throw makeError("Cl? Google Places manquante (Options).", "PLACES_KEY_MISSING");
   }
   return trimmed;
 }
@@ -914,7 +957,7 @@ async function createCalendarEventWithInvites(calendarId, payload) {
     }
     const summary = normalizeText(payload?.summary || "");
     if (!summary) {
-      throw makeError("Titre d'Ã©vÃ©nement manquant.", "GCAL_SUMMARY_MISSING");
+      throw makeError("Titre d'??v??nement manquant.", "GCAL_SUMMARY_MISSING");
     }
 
     const dateTimes = buildEventDateTimes(payload);
@@ -963,7 +1006,7 @@ async function createCalendarEventWithInvites(calendarId, payload) {
 
     return { ok: true, event: created };
   } catch (err) {
-    await handleError(err, "Google Calendar - crÃ©ation + invitations", { calendarId }, {
+    await handleError(err, "Google Calendar - cr??ation + invitations", { calendarId }, {
       syncName,
       notify: true,
     });
@@ -1112,7 +1155,7 @@ async function syncNotionToCalendar() {
     });
     return { ok: true, created: createdCount, updated: updatedCount, scanned: rows.length };
   } catch (err) {
-    await handleError(err, "Sync Notion â†’ Calendar", null, {
+    await handleError(err, "Sync Notion ??? Calendar", null, {
       syncName,
       notify: true,
     });
@@ -1307,7 +1350,7 @@ async function loadEventsRange(timeMin, timeMax, calendarIds, interactive) {
   } catch (err) {
     await handleError(
       err,
-      "Google Calendar - chargement des Ã©vÃ©nements",
+      "Google Calendar - chargement des ??v??nements",
       { timeMin, timeMax },
       { syncName }
     );
@@ -1857,7 +1900,7 @@ async function updateStageStatus(payload) {
         : statusRaw.toLowerCase().includes("entre")
           ? statusMap.interview || "Entretien"
           : statusRaw.toLowerCase().includes("refus") || statusRaw.toLowerCase().includes("recal")
-            ? statusMap.rejected || "Refusé"
+            ? statusMap.rejected || "Refus?"
             : statusRaw;
 
   let propPayload = null;
@@ -1896,14 +1939,14 @@ function normalizeStatus(value) {
 
 function isAppliedStatus(norm) {
   return (
-    norm === "candidature envoyée" ||
+    norm === "candidature envoy?e" ||
     norm === "candidature envoyee" ||
-    norm === "candidatures envoyées" ||
+    norm === "candidatures envoy?es" ||
     norm === "candidatures envoyees" ||
-    norm === "postulé" ||
+    norm === "postul?" ||
     norm === "postule" ||
     norm === "candidature envoyee" ||
-    norm === "envoyée" ||
+    norm === "envoy?e" ||
     norm === "envoyee"
   );
 }
@@ -1957,7 +2000,7 @@ async function getStageStatusStats() {
       appliedCount += count;
       return;
     }
-    if (norm === "recalé" || norm === "recale") {
+    if (norm === "recal?" || norm === "recale") {
       recaleCount += count;
       return;
     }
@@ -2174,8 +2217,8 @@ async function getDiagnosticsStatus() {
 
 async function runDiagnosticsTests() {
   const results = {
-    notion: { ok: false, message: "Non configurÃ©." },
-    google: { ok: false, message: "Non connectÃ©." },
+    notion: { ok: false, message: "Non configur??." },
+    google: { ok: false, message: "Non connect??." },
     at: Date.now(),
   };
 
@@ -2212,7 +2255,7 @@ async function runDiagnosticsTests() {
       results.google = { ok: true, message: "OK" };
       await recordDiagnosticSync("googleTest", "ok", { connected: true });
     } else {
-      results.google = { ok: false, message: "Non connectÃ©." };
+      results.google = { ok: false, message: "Non connect??." };
     }
   } catch (err) {
     const entry = await handleError(err, "Diagnostic Google Calendar", null, {
@@ -2234,7 +2277,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "CHECK_NOTION_DB") {
-    return respondWith(checkDbAndLoad(), sendResponse, "Notion - vÃ©rification base", {
+    return respondWith(checkDbAndLoad(), sendResponse, "Notion - v??rification base", {
       syncName: "notionCheck",
       successDetails: (r) => ({
         rows: r?.total ?? (Array.isArray(r?.rows) ? r.rows.length : null),
@@ -2244,7 +2287,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "CHECK_TODO_DB") {
-    return respondWith(checkTodoDb(), sendResponse, "Notion - vÃ©rification todo", {
+    return respondWith(checkTodoDb(), sendResponse, "Notion - v??rification todo", {
       syncName: "notionTodoCheck",
     });
   }
@@ -2336,7 +2379,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "GET_TODO_STAGES") {
-    return respondWith(listTodoStages(), sendResponse, "Notion - stages Ã  faire", {
+    return respondWith(listTodoStages(), sendResponse, "Notion - stages ?? faire", {
       syncName: "notionTodoStages",
       successDetails: (r) => ({
         total: r?.total ?? null,
@@ -2409,7 +2452,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         events,
       })),
       sendResponse,
-      "Google Calendar - chargement Ã©vÃ©nements",
+      "Google Calendar - chargement ??v??nements",
       {
         syncName: "gcalEvents",
         meta: { timeMin, timeMax, calendarIds: calendarIds || [] },
@@ -2492,7 +2535,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       await recordDiagnosticSync("googleAuth", "ok", { connected: false, loggedOut: true });
       sendResponse({ ok: true });
     } catch (err) {
-      const entry = await handleError(err, "Google Calendar - déconnexion", null, {
+      const entry = await handleError(err, "Google Calendar - d?connexion", null, {
         syncName: "googleAuth",
       });
       sendResponse({ ok: false, error: entry.message, code: entry.code });
@@ -2510,7 +2553,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return respondWith(
       createCalendarEvent(calendarId, event).then((created) => ({ ok: true, event: created })),
       sendResponse,
-      "Google Calendar - crÃ©ation Ã©vÃ©nement",
+      "Google Calendar - cr??ation ??v??nement",
       {
         syncName: "gcalCreateEvent",
         meta: { calendarId },
@@ -2534,7 +2577,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         event,
       })),
       sendResponse,
-      "Google Calendar - mise à jour événement",
+      "Google Calendar - mise ? jour ?v?nement",
       {
         syncName: "gcalUpdateEvent",
         meta: { calendarId, eventId },
@@ -2552,7 +2595,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return respondWith(
       deleteCalendarEvent(calendarId, eventId, sendUpdates || "all").then(() => ({ ok: true })),
       sendResponse,
-      "Google Calendar - suppression événement",
+      "Google Calendar - suppression ?v?nement",
       {
         syncName: "gcalDeleteEvent",
         meta: { calendarId, eventId },
@@ -2566,7 +2609,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return respondWith(
       createCalendarEventWithInvites(calendarId, event),
       sendResponse,
-      "Google Calendar - crÃ©ation + invitations",
+      "Google Calendar - cr??ation + invitations",
       {
         notify: true,
         syncName: "gcalCreateEventWithInvites",
@@ -2600,7 +2643,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "NOTION_SYNC_NOW") {
-    return respondWith(syncNotionToCalendar(), sendResponse, "Sync Notion â†’ Calendar", {
+    return respondWith(syncNotionToCalendar(), sendResponse, "Sync Notion ??? Calendar", {
       notify: true,
       syncName: "notionToCalendar",
     });
@@ -2672,7 +2715,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return respondWith(
       getYahooNews(true).then((data) => ({ ok: true, data })),
       sendResponse,
-      "Yahoo News - rafraÃ®chissement",
+      "Yahoo News - rafra??chissement",
       { syncName: "yahooNews" }
     );
   }
@@ -2811,7 +2854,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     try {
       await syncNotionToCalendar();
     } catch (err) {
-      await handleError(err, "Alarme Sync Notion â†’ Calendar", null, {
+      await handleError(err, "Alarme Sync Notion ??? Calendar", null, {
         syncName: "notionToCalendar",
       });
     }
@@ -2872,6 +2915,7 @@ async function flushOfflineQueue() {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
+  seedDefaultConfig().catch(() => {});
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
@@ -2891,6 +2935,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  seedDefaultConfig().catch(() => {});
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
@@ -2919,4 +2964,5 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     })
     .catch(() => {});
 });
+
 
