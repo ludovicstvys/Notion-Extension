@@ -196,11 +196,7 @@ function loadStats() {
     buildSegments(res);
     setCenterText();
     drawChart();
-    if (res.capped) {
-      statusEl.textContent = "Données limitées (200).";
-    } else {
-      statusEl.textContent = "";
-    }
+    statusEl.textContent = "";
   });
 }
 

@@ -6,7 +6,7 @@ try {
 
 const EXTENSION_DEFAULTS = self?.EXTENSION_DEFAULTS || null;
 const NOTION_VERSION = "2022-06-28";
-const MAX_LIST_ROWS = 200;
+const MAX_LIST_ROWS = Number.POSITIVE_INFINITY;
 const GCAL_BASE = "https://www.googleapis.com/calendar/v3";
 const GCAL_EVENTS_MAX = 250;
 const GCAL_NOTIFY_MINUTES = 30;
@@ -1633,7 +1633,7 @@ async function checkDbAndLoad() {
     columns,
     rows: mapped,
     total: rows.length,
-    capped: rows.length >= MAX_LIST_ROWS,
+    capped: false,
   };
 }
 
@@ -1687,7 +1687,7 @@ async function listOpenStages() {
     ok: true,
     items: mapped,
     total: rows.length,
-    capped: rows.length >= MAX_LIST_ROWS,
+    capped: false,
   };
 }
 
@@ -1749,7 +1749,7 @@ async function listTodoStages() {
     ok: true,
     items: mapped,
     total: rows.length,
-    capped: rows.length >= MAX_LIST_ROWS,
+    capped: false,
   };
 }
 
@@ -1791,7 +1791,7 @@ async function listAllStages() {
     ok: true,
     items: mapped,
     total: rows.length,
-    capped: rows.length >= MAX_LIST_ROWS,
+    capped: false,
   };
 }
 
@@ -1954,8 +1954,12 @@ function isAppliedStatus(norm) {
 async function getStageStatusStats() {
   const cached = await chrome.storage.local.get([STAGE_STATS_CACHE_KEY]);
   const cacheEntry = cached[STAGE_STATS_CACHE_KEY];
-  if (cacheEntry?.at && Date.now() - cacheEntry.at < STAGE_STATS_CACHE_TTL_MS) {
-    return { ...cacheEntry.data, cached: true };
+  if (
+    cacheEntry?.at &&
+    Date.now() - cacheEntry.at < STAGE_STATS_CACHE_TTL_MS &&
+    !cacheEntry?.data?.capped
+  ) {
+    return { ...cacheEntry.data, cached: true, capped: false };
   }
 
   const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
@@ -2020,7 +2024,7 @@ async function getStageStatusStats() {
     recale: recaleCount,
     other: otherCount,
     otherBreakdown,
-    capped: rows.length >= MAX_LIST_ROWS,
+    capped: false,
   };
   await chrome.storage.local.set({
     [STAGE_STATS_CACHE_KEY]: { at: Date.now(), data: result },

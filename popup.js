@@ -223,7 +223,7 @@ async function getDefaultCalendarId() {
 
 
 
-function renderOpenStages(items, capped) {
+function renderOpenStages(items, _capped) {
   openStagesEl.innerHTML = "";
   if (openStagesCountEl) {
     const count = Array.isArray(items) ? items.length : 0;
@@ -258,12 +258,6 @@ function renderOpenStages(items, capped) {
     openStagesEl.appendChild(li);
   });
 
-  if (capped) {
-    const li = document.createElement("li");
-    li.className = "hint";
-    li.textContent = "Liste limitee.";
-    openStagesEl.appendChild(li);
-  }
 }
 
 function loadOpenStages() {
@@ -293,7 +287,7 @@ function loadOpenStages() {
 
 loadOpenStages();
 
-function renderTodoStages(items, capped) {
+function renderTodoStages(items, _capped) {
   todoStagesEl.innerHTML = "";
   if (todoStagesCountEl) {
     const count = Array.isArray(items) ? items.length : 0;
@@ -328,12 +322,6 @@ function renderTodoStages(items, capped) {
     todoStagesEl.appendChild(li);
   });
 
-  if (capped) {
-    const li = document.createElement("li");
-    li.className = "hint";
-    li.textContent = "Liste limitee.";
-    todoStagesEl.appendChild(li);
-  }
 }
 
 function loadTodoStages() {

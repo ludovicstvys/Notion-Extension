@@ -269,7 +269,7 @@ if (focusSaveBtn) {
   });
 }
 
-function formatRows(rows, capped) {
+function formatRows(rows, _capped) {
   if (!rows || rows.length === 0) return "Aucune ligne chargee.";
 
   const lines = rows.map((r, i) => {
@@ -278,8 +278,7 @@ function formatRows(rows, capped) {
     return `${i + 1}. ${parts || "Sans titre"}${url}`;
   });
 
-  const capNote = capped ? "\n\n(liste limitee)" : "";
-  return `${rows.length} ligne(s) chargee(s)\n\n${lines.join("\n")}${capNote}`;
+  return `${rows.length} ligne(s) chargee(s)\n\n${lines.join("\n")}`;
 }
 
 function formatColumns(cols) {
