@@ -157,15 +157,15 @@ function friendlyMessage(code, fallback) {
     case "AUTH_REQUIRED":
       return "Authentification requise. Reconnecte ton compte Google.";
     case "NOTION_DB_NOT_FOUND":
-      return "Base Notion introuvable. V??rifie l'ID et le partage.";
+      return "Base Notion introuvable. Verifie l'ID et le partage.";
     case "NETWORK_ERROR":
-      return "Erreur r??seau. V??rifie ta connexion et r??essaie.";
+      return "Erreur reseau. Verifie ta connexion et reessaie.";
     case "HTTP_404":
       return "Ressource introuvable (404).";
     case "HTTP_429":
-      return "Trop de requ??tes (429). R??essaie dans quelques instants.";
+      return "Trop de requetes (429). Reessaie dans quelques instants.";
     case "HTTP_5XX":
-      return "Service indisponible c??t?? serveur. R??essaie plus tard.";
+      return "Service indisponible cote serveur. Reessaie plus tard.";
     default:
       return fallback || "Une erreur inconnue est survenue.";
   }
@@ -338,7 +338,7 @@ async function notionFetch(token, path, method, body) {
   } catch (err) {
     if (err?.status === 404 && path.startsWith("databases/")) {
       throw makeError(
-        "Base Notion introuvable (v??rifie l'ID et le partage).",
+        "Base Notion introuvable (verifie l'ID et le partage).",
         "NOTION_DB_NOT_FOUND",
         404,
         { path }
@@ -1153,7 +1153,7 @@ async function createCalendarEventWithInvites(calendarId, payload) {
     }
     const summary = normalizeText(payload?.summary || "");
     if (!summary) {
-      throw makeError("Titre d'??v??nement manquant.", "GCAL_SUMMARY_MISSING");
+      throw makeError("Titre d'evenement manquant.", "GCAL_SUMMARY_MISSING");
     }
 
     const dateTimes = buildEventDateTimes(payload);
@@ -1202,7 +1202,7 @@ async function createCalendarEventWithInvites(calendarId, payload) {
 
     return { ok: true, event: created };
   } catch (err) {
-    await handleError(err, "Google Calendar - cr??ation + invitations", { calendarId }, {
+    await handleError(err, "Google Calendar - creation + invitations", { calendarId }, {
       syncName,
       notify: true,
     });
@@ -1351,7 +1351,7 @@ async function syncNotionToCalendar() {
     });
     return { ok: true, created: createdCount, updated: updatedCount, scanned: rows.length };
   } catch (err) {
-    await handleError(err, "Sync Notion ??? Calendar", null, {
+    await handleError(err, "Sync Notion -> Calendar", null, {
       syncName,
       notify: true,
     });
@@ -1558,7 +1558,7 @@ async function loadEventsRange(timeMin, timeMax, calendarIds, interactive) {
   } catch (err) {
     await handleError(
       err,
-      "Google Calendar - chargement des ??v??nements",
+      "Google Calendar - chargement des evenements",
       { timeMin, timeMax },
       { syncName }
     );
@@ -2899,8 +2899,8 @@ async function getDiagnosticsStatus() {
 
 async function runDiagnosticsTests() {
   const results = {
-    notion: { ok: false, message: "Non configur??." },
-    google: { ok: false, message: "Non connect??." },
+    notion: { ok: false, message: "Non configure." },
+    google: { ok: false, message: "Non connecte." },
     at: Date.now(),
   };
 
@@ -2937,7 +2937,7 @@ async function runDiagnosticsTests() {
       results.google = { ok: true, message: "OK" };
       await recordDiagnosticSync("googleTest", "ok", { connected: true });
     } else {
-      results.google = { ok: false, message: "Non connect??." };
+      results.google = { ok: false, message: "Non connecte." };
     }
   } catch (err) {
     const entry = await handleError(err, "Diagnostic Google Calendar", null, {
@@ -2959,7 +2959,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "CHECK_NOTION_DB") {
-    return respondWith(checkDbAndLoad(), sendResponse, "Notion - v??rification base", {
+    return respondWith(checkDbAndLoad(), sendResponse, "Notion - verification base", {
       syncName: "notionCheck",
       successDetails: (r) => ({
         rows: r?.total ?? (Array.isArray(r?.rows) ? r.rows.length : null),
@@ -2969,7 +2969,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "CHECK_TODO_DB") {
-    return respondWith(checkTodoDb(), sendResponse, "Notion - v??rification todo", {
+    return respondWith(checkTodoDb(), sendResponse, "Notion - verification todo", {
       syncName: "notionTodoCheck",
     });
   }
@@ -3061,7 +3061,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "GET_TODO_STAGES") {
-    return respondWith(listTodoStages(), sendResponse, "Notion - stages ?? faire", {
+    return respondWith(listTodoStages(), sendResponse, "Notion - stages a faire", {
       syncName: "notionTodoStages",
       successDetails: (r) => ({
         total: r?.total ?? null,
@@ -3161,7 +3161,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         events,
       })),
       sendResponse,
-      "Google Calendar - chargement ??v??nements",
+      "Google Calendar - chargement evenements",
       {
         syncName: "gcalEvents",
         meta: { timeMin, timeMax, calendarIds: calendarIds || [] },
@@ -3262,7 +3262,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return respondWith(
       createCalendarEvent(calendarId, event).then((created) => ({ ok: true, event: created })),
       sendResponse,
-      "Google Calendar - cr??ation ??v??nement",
+      "Google Calendar - creation evenement",
       {
         syncName: "gcalCreateEvent",
         meta: { calendarId },
@@ -3318,7 +3318,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return respondWith(
       createCalendarEventWithInvites(calendarId, event),
       sendResponse,
-      "Google Calendar - cr??ation + invitations",
+      "Google Calendar - creation + invitations",
       {
         notify: true,
         syncName: "gcalCreateEventWithInvites",
@@ -3352,7 +3352,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "NOTION_SYNC_NOW") {
-    return respondWith(syncNotionToCalendar(), sendResponse, "Sync Notion ??? Calendar", {
+    return respondWith(syncNotionToCalendar(), sendResponse, "Sync Notion -> Calendar", {
       notify: true,
       syncName: "notionToCalendar",
     });
@@ -3449,7 +3449,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return respondWith(
       getYahooNews(true).then((data) => ({ ok: true, data })),
       sendResponse,
-      "Yahoo News - rafra??chissement",
+      "Yahoo News - rafraichissement",
       { syncName: "yahooNews" }
     );
   }
@@ -3682,7 +3682,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     try {
       await syncNotionToCalendar();
     } catch (err) {
-      await handleError(err, "Alarme Sync Notion ??? Calendar", null, {
+      await handleError(err, "Alarme Sync Notion -> Calendar", null, {
         syncName: "notionToCalendar",
       });
     }
@@ -4001,5 +4001,3 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     autoImportFromTab(tabId, candidateUrl).catch(() => {});
   }
 });
-
-

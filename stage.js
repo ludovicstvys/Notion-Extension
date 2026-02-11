@@ -38,6 +38,9 @@ const KANBAN_WIP_LIMITS = {
   entretien: 8,
   refuse: 999,
 };
+const STAGE_VIEW_MODE_KEY = "stageViewMode";
+const STAGE_VIEW_LIST = "list";
+const STAGE_VIEW_BOARD = "board";
 
 function normalizeText(input) {
   const text = (input ?? "").toString();
@@ -56,6 +59,20 @@ function normalizeStatus(value) {
 function findColumnLabelByKey(key) {
   const col = KANBAN_COLUMNS.find((c) => c.key === key);
   return col?.label || "Ouvert";
+}
+
+function applyStageViewMode(mode) {
+  if (!(kanbanListTab && kanbanBoardTab && kanbanListView && kanbanBoardView)) return;
+  const boardMode = mode === STAGE_VIEW_BOARD;
+  kanbanListTab.classList.toggle("active", !boardMode);
+  kanbanBoardTab.classList.toggle("active", boardMode);
+  kanbanListView.classList.toggle("kanban-hidden", boardMode);
+  kanbanBoardView.classList.toggle("kanban-hidden", !boardMode);
+  if (boardMode) renderKanban();
+}
+
+function persistStageViewMode(mode) {
+  chrome.storage.local.set({ [STAGE_VIEW_MODE_KEY]: mode });
 }
 
 function renderWeeklyKpis(data) {
@@ -126,7 +143,6 @@ function renderStageBlockers(items) {
     nextBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       updateStageStatus(item.id, item.suggestedNextStatus);
-      loadStageBlockers();
     });
     actions.appendChild(nextBtn);
     if (item.url) {
@@ -254,9 +270,9 @@ function buildSegments(data) {
 
   const list = [
     { key: "open", label: "Ouvert", count: open, color: "#0a84ff" },
-    { key: "applied", label: "Candidatures envoyÃ©es", count: applied, color: "#34c759" },
+    { key: "applied", label: "Candidatures envoyees", count: applied, color: "#34c759" },
     { key: "other", label: "Autres", count: other, color: "#8e8e93" },
-    { key: "recale", label: "RecalÃ©", count: recale, color: "#ff453a" },
+    { key: "recale", label: "Recale", count: recale, color: "#ff453a" },
   ].filter((s) => s.count > 0);
 
   if (list.length === 0 && total === 0) {
@@ -504,7 +520,14 @@ function updateStageStatus(id, status) {
   chrome.runtime.sendMessage(
     { type: "UPDATE_STAGE_STATUS", payload: { id, status } },
     (res) => {
+      if (chrome.runtime.lastError) {
+        const msg = `Erreur extension: ${chrome.runtime.lastError.message}`;
+        if (kanbanStatusEl) kanbanStatusEl.textContent = msg;
+        if (allStatusEl) allStatusEl.textContent = msg;
+        return;
+      }
       if (res?.ok) {
+        if (kanbanStatusEl) kanbanStatusEl.textContent = "";
         item.status = status;
         renderKanban();
         applyAllStagesFilter();
@@ -512,7 +535,9 @@ function updateStageStatus(id, status) {
         loadStageBlockers();
         loadStageDataQuality();
       } else {
-        // keep local state unchanged
+        const msg = `Erreur: ${res?.error || "mise a jour impossible"}`;
+        if (kanbanStatusEl) kanbanStatusEl.textContent = msg;
+        if (allStatusEl) allStatusEl.textContent = msg;
       }
     }
   );
@@ -751,17 +776,16 @@ if (allSearchEl) {
 
 if (kanbanListTab && kanbanBoardTab && kanbanListView && kanbanBoardView) {
   kanbanListTab.addEventListener("click", () => {
-    kanbanListTab.classList.add("active");
-    kanbanBoardTab.classList.remove("active");
-    kanbanListView.classList.remove("kanban-hidden");
-    kanbanBoardView.classList.add("kanban-hidden");
+    applyStageViewMode(STAGE_VIEW_LIST);
+    persistStageViewMode(STAGE_VIEW_LIST);
   });
   kanbanBoardTab.addEventListener("click", () => {
-    kanbanBoardTab.classList.add("active");
-    kanbanListTab.classList.remove("active");
-    kanbanBoardView.classList.remove("kanban-hidden");
-    kanbanListView.classList.add("kanban-hidden");
-    renderKanban();
+    applyStageViewMode(STAGE_VIEW_BOARD);
+    persistStageViewMode(STAGE_VIEW_BOARD);
+  });
+  chrome.storage.local.get([STAGE_VIEW_MODE_KEY], (data) => {
+    const saved = data?.[STAGE_VIEW_MODE_KEY];
+    applyStageViewMode(saved === STAGE_VIEW_BOARD ? STAGE_VIEW_BOARD : STAGE_VIEW_LIST);
   });
 }
 

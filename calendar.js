@@ -1897,7 +1897,7 @@ function makeEventChip(ev) {
     loc.href = mapsUrl;
     loc.target = "_blank";
     loc.rel = "noreferrer";
-    loc.textContent = `?? ${locationText}`;
+    loc.textContent = `Lieu: ${locationText}`;
     loc.addEventListener("click", (e) => e.stopPropagation());
     chip.appendChild(loc);
   }
