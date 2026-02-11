@@ -17,6 +17,8 @@ const GCAL_NOTIFIED_KEY = "gcalNotified";
 const GCAL_NOTIFY_WINDOW_MIN = 10;
 const GCAL_CACHE_KEY = "gcalEventCache";
 const GCAL_CACHE_TTL_MS = 5 * 60 * 1000;
+const GCAL_REMINDER_PREFS_KEY = "gcalReminderPrefs";
+const GCAL_SNOOZE_ALARM_PREFIX = "gcal-snooze|";
 const YAHOO_NEWS_ALARM = "yahoo-news-sync";
 const YAHOO_NEWS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline";
 const YAHOO_NEWS_CACHE_MIN = 15;
@@ -38,6 +40,12 @@ const BDF_API_KEY_KEY = "bdfApiKey";
 const GOOGLE_PLACES_KEY_KEY = "googlePlacesApiKey";
 const STAGE_STATS_CACHE_KEY = "stageStatsCache";
 const STAGE_STATS_CACHE_TTL_MS = 5 * 60 * 1000;
+const STAGE_TODO_AUTOMATION_KEY = "stageTodoAutomationMap";
+const STAGE_SLA_OPEN_DAYS = 7;
+const STAGE_SLA_APPLIED_DAYS = 10;
+const STAGE_SLA_ALARM = "stage-sla-check";
+const PIPELINE_AUTO_IMPORT_KEY = "pipelineAutoImportEnabled";
+const PIPELINE_RECENT_IMPORTS_KEY = "pipelineRecentImports";
 const DIAG_ERRORS_KEY = "diagErrors";
 const DIAG_ERRORS_LIMIT = 25;
 const DIAG_SYNC_KEY = "diagSyncStats";
@@ -342,6 +350,194 @@ async function notionFetch(token, path, method, body) {
 
 function todayISODate() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function isoDatePlusDays(days) {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + Number(days || 0));
+  return d.toISOString().slice(0, 10);
+}
+
+function parseDateFromAny(value) {
+  if (!value) return null;
+  const iso = String(value).match(/\b\d{4}-\d{2}-\d{2}\b/);
+  if (iso) {
+    const d = new Date(`${iso[0]}T12:00:00`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function extractDateCandidatesFromText(value) {
+  const text = normalizeText(value || "");
+  if (!text) return [];
+  const found = [];
+  const isoMatches = text.match(/\b\d{4}-\d{2}-\d{2}\b/g) || [];
+  const frMatches = text.match(/\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b/g) || [];
+  [...isoMatches, ...frMatches].forEach((m) => {
+    const normalized = m.replace(/[.]/g, "/");
+    const dmy = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (dmy) {
+      const day = dmy[1].padStart(2, "0");
+      const month = dmy[2].padStart(2, "0");
+      let year = dmy[3];
+      if (year.length === 2) year = `20${year}`;
+      found.push(`${year}-${month}-${day}`);
+      return;
+    }
+    const d = parseDateFromAny(normalized);
+    if (d) found.push(d.toISOString().slice(0, 10));
+  });
+  return Array.from(new Set(found));
+}
+
+function startOfWeek(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay();
+  const diff = (day + 6) % 7;
+  d.setDate(d.getDate() - diff);
+  return d;
+}
+
+function isDateInCurrentWeek(input) {
+  const d = parseDateFromAny(input);
+  if (!d) return false;
+  const now = new Date();
+  const start = startOfWeek(now);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return d >= start && d < end;
+}
+
+function normalizeStageStatusForAutomation(value) {
+  const v = normalizeText(value || "").toLowerCase();
+  if (!v) return "ouvert";
+  if (v.startsWith("ouv")) return "ouvert";
+  if (v.includes("candid") || v.includes("postul") || v.includes("envoy")) return "candidature";
+  if (v.includes("entre") || v.includes("interview")) return "entretien";
+  if (v.includes("refus") || v.includes("recal")) return "refuse";
+  return v;
+}
+
+function normalizeCompareText(value) {
+  return normalizeText(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function diceCoefficient(a, b) {
+  const x = normalizeCompareText(a);
+  const y = normalizeCompareText(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  if (x.length < 2 || y.length < 2) return x === y ? 1 : 0;
+
+  const grams = new Map();
+  for (let i = 0; i < x.length - 1; i += 1) {
+    const gram = x.slice(i, i + 2);
+    grams.set(gram, (grams.get(gram) || 0) + 1);
+  }
+  let overlap = 0;
+  for (let i = 0; i < y.length - 1; i += 1) {
+    const gram = y.slice(i, i + 2);
+    const count = grams.get(gram) || 0;
+    if (count > 0) {
+      overlap += 1;
+      grams.set(gram, count - 1);
+    }
+  }
+  return (2 * overlap) / (x.length + y.length - 2);
+}
+
+function sameUrl(a, b) {
+  const canonicalize = (input) => {
+    const u = new URL(input);
+    u.hash = "";
+    const kept = [];
+    u.searchParams.forEach((v, k) => {
+      if (/^utm_/i.test(k)) return;
+      if (k.toLowerCase() === "trk") return;
+      kept.push([k, v]);
+    });
+    kept.sort((x, y) => x[0].localeCompare(y[0]));
+    u.search = "";
+    kept.forEach(([k, v]) => u.searchParams.append(k, v));
+    return u.toString().replace(/\/$/, "");
+  };
+  try {
+    return canonicalize(a) === canonicalize(b);
+  } catch (_) {
+    return normalizeText(a) === normalizeText(b);
+  }
+}
+
+function inferCompanyFromUrl(url) {
+  if (!url) return "";
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    const parts = host.split(".");
+    const core = parts.length >= 2 ? parts[parts.length - 2] : host;
+    return core.charAt(0).toUpperCase() + core.slice(1);
+  } catch (_) {
+    return "";
+  }
+}
+
+function suggestDeadlineFromStageData(stageTitle, stageUrl, notes) {
+  const candidates = [
+    ...extractDateCandidatesFromText(stageTitle),
+    ...extractDateCandidatesFromText(stageUrl),
+    ...extractDateCandidatesFromText(notes),
+  ];
+  if (!candidates.length) return "";
+  const today = todayISODate();
+  const upcoming = candidates
+    .filter((d) => d >= today)
+    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+  return upcoming[0] || "";
+}
+
+function defaultReminderPrefs() {
+  return {
+    default: [30],
+    meeting: [30],
+    entretien: [120, 30],
+    deadline: [24 * 60, 60],
+  };
+}
+
+function normalizeReminderPrefs(raw) {
+  const base = defaultReminderPrefs();
+  const out = { ...base };
+  const src = raw && typeof raw === "object" ? raw : {};
+  Object.keys(base).forEach((key) => {
+    const arr = Array.isArray(src[key]) ? src[key] : base[key];
+    const clean = arr
+      .map((n) => Number.parseInt(n, 10))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .slice(0, 4);
+    out[key] = clean.length ? clean : base[key];
+  });
+  return out;
+}
+
+function classifyCalendarEventType(event) {
+  const text = `${event?.summary || ""} ${event?.description || ""} ${event?.location || ""}`.toLowerCase();
+  if (/deadline|due|date limite|closing/i.test(text)) return "deadline";
+  if (/entretien|interview/i.test(text)) return "entretien";
+  const meetingLink = extractMeetingLink(event);
+  if (meetingLink) return "meeting";
+  return "default";
+}
+
+function buildGcalAlarmName(eventKey, minutesBefore) {
+  return `${GCAL_ALARM_PREFIX}${eventKey}|m${minutesBefore}`;
 }
 
 function normalizeText(input) {
@@ -1237,11 +1433,14 @@ function tagItem(text, rules) {
 }
 
 async function scheduleEventAlerts(eventsByCalendar) {
-  const { gcalEventMap, gcalNotifyCalendars } = await chrome.storage.local.get([
+  const { gcalEventMap, gcalNotifyCalendars, [GCAL_REMINDER_PREFS_KEY]: rawReminderPrefs } =
+    await chrome.storage.local.get([
     "gcalEventMap",
     "gcalNotifyCalendars",
+    GCAL_REMINDER_PREFS_KEY,
   ]);
   const map = gcalEventMap || {};
+  const reminderPrefs = normalizeReminderPrefs(rawReminderPrefs);
   const now = Date.now();
   const notifyEnabled = Array.isArray(gcalNotifyCalendars) ? gcalNotifyCalendars : null;
 
@@ -1251,20 +1450,27 @@ async function scheduleEventAlerts(eventsByCalendar) {
     for (const ev of events) {
       const start = eventStartDate(ev);
       if (!start) continue;
-      const alarmTime = start.getTime() - GCAL_NOTIFY_MINUTES * 60 * 1000;
-      if (alarmTime <= now) continue;
-
       const eventKey = makeEventKey(calendarId, ev);
-      const alarmName = buildAlarmName(eventKey);
-      map[alarmName] = {
-        calendarId,
-        calendarSummary,
-        eventId: ev.id,
-        summary: ev.summary || "Evenement",
-        start: start.toISOString(),
-      };
+      const eventType = classifyCalendarEventType(ev);
+      const offsets = reminderPrefs[eventType] || reminderPrefs.default || [GCAL_NOTIFY_MINUTES];
+      const link = extractMeetingLink(ev) || ev.htmlLink || ev.source?.url || "";
 
-      chrome.alarms.create(alarmName, { when: alarmTime });
+      offsets.forEach((minutesBefore) => {
+        const alarmTime = start.getTime() - minutesBefore * 60 * 1000;
+        if (alarmTime <= now) return;
+        const alarmName = buildGcalAlarmName(eventKey, minutesBefore);
+        map[alarmName] = {
+          calendarId,
+          calendarSummary,
+          eventId: ev.id,
+          summary: ev.summary || "Evenement",
+          start: start.toISOString(),
+          minutesBefore,
+          link,
+          eventType,
+        };
+        chrome.alarms.create(alarmName, { when: alarmTime });
+      });
     }
   }
 
@@ -1319,19 +1525,21 @@ async function loadEventsRange(timeMin, timeMax, calendarIds, interactive) {
           location: ev.location || "",
           start: ev.start?.dateTime || ev.start?.date || "",
           end: ev.end?.dateTime || ev.end?.date || "",
-        calendarId: bucket.calendarId,
-        calendarSummary: bucket.calendarSummary,
-        htmlLink: ev.htmlLink || "",
-        sourceUrl: ev.source?.url || "",
-        description: ev.description || "",
-        attendees: (ev.attendees || [])
-          .map((a) => a?.email)
-          .filter(Boolean),
-        meetingLink: extractMeetingLink(ev),
-        tags: tagItem(
-          `${ev.summary || ""} ${ev.location || ""} ${ev.description || ""} ${
-            ev.htmlLink || ""
-          }`,
+          calendarId: bucket.calendarId,
+          calendarSummary: bucket.calendarSummary,
+          htmlLink: ev.htmlLink || "",
+          sourceUrl: ev.source?.url || "",
+          description: ev.description || "",
+          attendees: (ev.attendees || [])
+            .map((a) => a?.email)
+            .filter(Boolean),
+          meetingLink: extractMeetingLink(ev),
+          sourceType: "google",
+          eventType: classifyCalendarEventType(ev),
+          tags: tagItem(
+            `${ev.summary || ""} ${ev.location || ""} ${ev.description || ""} ${
+              ev.htmlLink || ""
+            }`,
             tagRules
           ),
         });
@@ -1496,6 +1704,179 @@ function buildProps(data, map, statusMap) {
   return props;
 }
 
+function isOpenStagePayload(payload, statusMap) {
+  if (payload?.applied === true) return false;
+  const rawStatus = normalizeText(payload?.status || "");
+  if (!rawStatus) return true;
+
+  const openLabel = normalizeText(statusMap?.open || "Ouvert").toLowerCase();
+  const status = rawStatus.toLowerCase();
+  if (status === openLabel) return true;
+  return status.startsWith("ouv");
+}
+
+function buildOpenStageTodoPayload(payload) {
+  const company = normalizeText(payload?.company || "");
+  const title = normalizeText(payload?.title || "");
+  const label = [company, title].filter(Boolean).join(" - ") || "Stage";
+  const url = normalizeText(payload?.url || "");
+  const deadline = normalizeText(payload?.deadline || "");
+  const notesParts = [];
+  if (url) notesParts.push(url);
+  if (deadline) notesParts.push(`Deadline: ${deadline}`);
+  return {
+    task: `Postuler: ${label}`,
+    dueDate: isoDatePlusDays(3),
+    status: "Not Started",
+    notes: notesParts.join("\n"),
+  };
+}
+
+async function findDuplicateStageBySmartMatch(token, dbId, payload, map) {
+  const url = normalizeText(payload?.url || "");
+  const title = normalizeText(payload?.title || "");
+  const company = normalizeText(payload?.company || "");
+  if (!url && !title) return null;
+
+  const rows = await listDbRowsLimited(token, dbId, null, 350);
+  const jobTitleKey = map.jobTitle || "Job Title";
+  const companyKey = map.company || "Entreprise";
+  const urlKey = map.url || "lien offre";
+
+  let best = null;
+  let bestScore = 0;
+
+  rows.forEach((r) => {
+    const p = r.properties || {};
+    const rowTitle = propText(p[jobTitleKey]) || propText(p["Name"]) || "";
+    const rowCompany = propText(p[companyKey]) || "";
+    const rowUrl = propText(p[urlKey]) || "";
+
+    if (url && rowUrl && sameUrl(url, rowUrl)) {
+      best = r;
+      bestScore = 2;
+      return;
+    }
+    const titleScore = diceCoefficient(title, rowTitle);
+    const companyScore = diceCoefficient(company, rowCompany);
+    const score = titleScore * 0.7 + companyScore * 0.3;
+    const exactPair =
+      normalizeCompareText(title) === normalizeCompareText(rowTitle) &&
+      normalizeCompareText(company) === normalizeCompareText(rowCompany);
+    if (exactPair && score >= bestScore) {
+      best = r;
+      bestScore = 1.5;
+      return;
+    }
+    if (score > bestScore && score >= 0.86) {
+      best = r;
+      bestScore = score;
+    }
+  });
+
+  return best;
+}
+
+function suggestTodoDueDate(deadlineText, fallbackDays) {
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const fallback = new Date(today);
+  fallback.setDate(fallback.getDate() + fallbackDays);
+  const deadline = parseDateFromAny(deadlineText);
+  if (!deadline) return fallback.toISOString().slice(0, 10);
+
+  const adjusted = new Date(deadline);
+  adjusted.setHours(12, 0, 0, 0);
+  adjusted.setDate(adjusted.getDate() - 1);
+  const chosen = adjusted < fallback ? adjusted : fallback;
+  if (chosen < today) return today.toISOString().slice(0, 10);
+  return chosen.toISOString().slice(0, 10);
+}
+
+function buildStageTodoTemplates(stage, statusKind) {
+  const company = normalizeText(stage?.company || "");
+  const title = normalizeText(stage?.title || "");
+  const label = [company, title].filter(Boolean).join(" - ") || "Stage";
+  const url = normalizeText(stage?.url || "");
+  const deadline = normalizeText(stage?.closeDate || "");
+  const baseNotes = [url, deadline ? `Deadline: ${deadline}` : ""].filter(Boolean).join("\n");
+
+  if (statusKind === "ouvert") {
+    return [
+      {
+        task: `Postuler: ${label}`,
+        dueDate: suggestTodoDueDate(deadline, 3),
+        status: "Not Started",
+        notes: baseNotes,
+      },
+    ];
+  }
+  if (statusKind === "candidature") {
+    return [
+      {
+        task: `Relance candidature: ${label}`,
+        dueDate: suggestTodoDueDate(deadline, 5),
+        status: "Not Started",
+        notes: baseNotes,
+      },
+      {
+        task: `Suivi RH: ${label}`,
+        dueDate: suggestTodoDueDate(deadline, 7),
+        status: "Not Started",
+        notes: baseNotes,
+      },
+    ];
+  }
+  if (statusKind === "entretien") {
+    return [
+      {
+        task: `Prepa entretien: ${label}`,
+        dueDate: suggestTodoDueDate(deadline, 2),
+        status: "Not Started",
+        notes: baseNotes,
+      },
+      {
+        task: `Suivi RH: ${label}`,
+        dueDate: suggestTodoDueDate(deadline, 4),
+        status: "Not Started",
+        notes: baseNotes,
+      },
+    ];
+  }
+  return [];
+}
+
+async function maybeCreateTodosForStageStatus(stage, statusKind) {
+  const templates = buildStageTodoTemplates(stage, statusKind);
+  if (!templates.length) return { created: 0 };
+
+  const key = `${stage?.id || ""}|${statusKind}`;
+  if (!stage?.id) return { created: 0 };
+  const { [STAGE_TODO_AUTOMATION_KEY]: rawMap } = await chrome.storage.local.get([
+    STAGE_TODO_AUTOMATION_KEY,
+  ]);
+  const map = rawMap && typeof rawMap === "object" ? rawMap : {};
+  if (map[key]) return { created: 0 };
+
+  let created = 0;
+  for (const task of templates) {
+    try {
+      await createNotionTodo(task);
+      created += 1;
+    } catch (err) {
+      await handleError(err, "Todo auto - stage statut", {
+        stageId: stage.id || null,
+        statusKind,
+        task: task.task,
+      });
+    }
+  }
+
+  map[key] = Date.now();
+  await chrome.storage.local.set({ [STAGE_TODO_AUTOMATION_KEY]: map });
+  return { created };
+}
+
 async function upsertToNotion(payload) {
   const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
     "notionToken",
@@ -1516,7 +1897,10 @@ async function upsertToNotion(payload) {
   const statusMap = notionStatusMap || {};
 
   try {
-    const existing = await findByUrl(token, normalizedDbId, payload.url, map);
+    let existing = await findByUrl(token, normalizedDbId, payload.url, map);
+    if (!existing) {
+      existing = await findDuplicateStageBySmartMatch(token, normalizedDbId, payload, map);
+    }
     const properties = buildProps(payload, map, statusMap);
 
     if (existing) {
@@ -1527,6 +1911,18 @@ async function upsertToNotion(payload) {
         parent: { database_id: normalizedDbId },
         properties,
       });
+      if (isOpenStagePayload(payload, statusMap)) {
+        await maybeCreateTodosForStageStatus(
+          {
+            id: `upsert|${normalizeText(payload?.url || payload?.title || String(Date.now()))}`,
+            title: payload?.title || "",
+            company: payload?.company || "",
+            closeDate: payload?.deadline || "",
+            url: payload?.url || "",
+          },
+          "ouvert"
+        );
+      }
       return { ok: true, mode: "created" };
     }
   } catch (e) {
@@ -1575,6 +1971,24 @@ async function listDbRows(token, dbId, filter) {
   }
 
   return rows.slice(0, MAX_LIST_ROWS);
+}
+
+async function listDbRowsLimited(token, dbId, filter, limit = 300) {
+  let rows = [];
+  let cursor = undefined;
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, limit) : 300;
+
+  while (rows.length < safeLimit) {
+    const body = { page_size: Math.min(100, safeLimit - rows.length) };
+    if (filter) body.filter = filter;
+    if (cursor) body.start_cursor = cursor;
+    const r = await notionFetch(token, `databases/${dbId}/query`, "POST", body);
+    rows = rows.concat(r.results || []);
+    if (!r.has_more || !r.next_cursor) break;
+    cursor = r.next_cursor;
+  }
+
+  return rows.slice(0, safeLimit);
 }
 
 async function checkDbAndLoad() {
@@ -1795,6 +2209,177 @@ async function listAllStages() {
   };
 }
 
+async function getStageBlockers() {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const rows = await listDbRowsLimited(token, normalizedDbId, null, 400);
+  const statusKey = map.status || "Status";
+  const jobTitleKey = map.jobTitle || "Job Title";
+  const companyKey = map.company || "Entreprise";
+  const urlKey = map.url || "lien offre";
+  const blockers = [];
+  const now = Date.now();
+
+  rows.forEach((r) => {
+    const p = r.properties || {};
+    const status = propText(p[statusKey]) || "";
+    const kind = normalizeStageStatusForAutomation(status);
+    const lastEdited = new Date(r.last_edited_time || r.created_time || 0).getTime();
+    if (!Number.isFinite(lastEdited) || lastEdited <= 0) return;
+    const days = Math.floor((now - lastEdited) / (1000 * 60 * 60 * 24));
+    const overOpen = kind === "ouvert" && days > STAGE_SLA_OPEN_DAYS;
+    const overApplied = kind === "candidature" && days > STAGE_SLA_APPLIED_DAYS;
+    if (!overOpen && !overApplied) return;
+    blockers.push({
+      id: r.id,
+      title: propText(p[jobTitleKey]) || propText(p["Name"]) || "",
+      company: propText(p[companyKey]) || "",
+      url: propText(p[urlKey]) || "",
+      status,
+      stagnantDays: days,
+      reason: overOpen
+        ? `Ouvert > ${STAGE_SLA_OPEN_DAYS} jours`
+        : `Candidature > ${STAGE_SLA_APPLIED_DAYS} jours`,
+      suggestedNextStatus: overOpen ? "Candidature" : "Entretien",
+    });
+  });
+
+  blockers.sort((a, b) => b.stagnantDays - a.stagnantDays);
+  return { ok: true, items: blockers, total: blockers.length };
+}
+
+async function getStageDataQuality() {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const rows = await listDbRowsLimited(token, normalizedDbId, null, 400);
+  const jobTitleKey = map.jobTitle || "Job Title";
+  const companyKey = map.company || "Entreprise";
+  const urlKey = map.url || "lien offre";
+  const closeDateKey = map.closeDate || "Date de fermeture";
+  const notesKey = map.notes || "Notes";
+  const issues = [];
+
+  rows.forEach((r) => {
+    const p = r.properties || {};
+    const stageTitle = propText(p[jobTitleKey]) || propText(p["Name"]) || "";
+    const company = propText(p[companyKey]) || "";
+    const url = propText(p[urlKey]) || "";
+    const closeDate = propText(p[closeDateKey]) || "";
+    const notes = propText(p[notesKey]) || "";
+
+    if (!company) {
+      issues.push({
+        id: r.id,
+        field: "company",
+        title: stageTitle,
+        currentValue: "",
+        suggestedValue: inferCompanyFromUrl(url),
+      });
+    }
+    if (!url) {
+      const maybeUrl = String(stageTitle).match(/https?:\/\/\S+/)?.[0] || "";
+      issues.push({
+        id: r.id,
+        field: "url",
+        title: stageTitle,
+        currentValue: "",
+        suggestedValue: maybeUrl,
+      });
+    }
+    if (!closeDate) {
+      const suggestedDeadline = suggestDeadlineFromStageData(stageTitle, url, notes);
+      issues.push({
+        id: r.id,
+        field: "deadline",
+        title: stageTitle,
+        currentValue: "",
+        suggestedValue: suggestedDeadline,
+      });
+    }
+  });
+
+  return { ok: true, items: issues, total: issues.length };
+}
+
+async function applyStageQualityFix(payload) {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const pageId = payload?.id;
+  if (!pageId) throw new Error("Stage ID manquant.");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const companyKey = map.company || "Entreprise";
+  const urlKey = map.url || "lien offre";
+  const closeDateKey = map.closeDate || "Date de fermeture";
+  const properties = {};
+  const value = normalizeText(payload?.value || "");
+  const field = normalizeText(payload?.field || "").toLowerCase();
+  if (!field) throw new Error("Champ manquant.");
+
+  if (field === "company" && value) {
+    const prop = db.properties?.[companyKey];
+    if (prop?.type === "rich_text") {
+      properties[companyKey] = { rich_text: [{ text: { content: value } }] };
+    } else if (prop?.type === "title") {
+      properties[companyKey] = { title: [{ text: { content: value } }] };
+    } else if (prop?.type === "select") {
+      properties[companyKey] = { select: { name: value } };
+    }
+  } else if (field === "url" && value) {
+    const prop = db.properties?.[urlKey];
+    if (prop?.type === "url") {
+      properties[urlKey] = { url: value };
+    } else {
+      properties[urlKey] = { rich_text: [{ text: { content: value } }] };
+    }
+  } else if (field === "deadline" && value) {
+    const prop = db.properties?.[closeDateKey];
+    const deadlineIso = extractDateCandidatesFromText(value)[0] || value;
+    if (prop?.type === "date") {
+      properties[closeDateKey] = { date: { start: deadlineIso } };
+    } else {
+      properties[closeDateKey] = { rich_text: [{ text: { content: deadlineIso } }] };
+    }
+  } else {
+    return { ok: false, error: "Aucune correction applicable." };
+  }
+
+  await notionFetch(token, `pages/${pageId}`, "PATCH", { properties });
+  return { ok: true };
+}
+
 async function getStageById(pageId) {
   const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
     "notionToken",
@@ -1891,6 +2476,9 @@ async function updateStageStatus(payload) {
   const statusKey = map.status || "Status";
   const statusProp = db.properties?.[statusKey];
   if (!statusProp) throw new Error("Colonne Status introuvable dans la base.");
+  const page = await notionFetch(token, `pages/${pageId}`, "GET");
+  const props = page.properties || {};
+  const previousRaw = propText(props[statusKey]) || "";
 
   const value =
     statusRaw.toLowerCase().startsWith("ouv")
@@ -1914,8 +2502,42 @@ async function updateStageStatus(payload) {
     throw new Error("Type de colonne Status non supporte.");
   }
 
+  const applicationDateKey = map.applicationDate || "Application Date";
+  const closeDateKey = map.closeDate || "Date de fermeture";
+  const companyKey = map.company || "Entreprise";
+  const jobTitleKey = map.jobTitle || "Job Title";
+  const urlKey = map.url || "lien offre";
+
+  // Auto-transition side effect: set application date when candidacy is sent.
+  if (normalizeStageStatusForAutomation(value) === "candidature") {
+    const appDateProp = db.properties?.[applicationDateKey];
+    if (appDateProp?.type === "date") {
+      propPayload[applicationDateKey] = { date: { start: todayISODate() } };
+    } else if (appDateProp?.type === "rich_text" || appDateProp?.type === "title") {
+      propPayload[applicationDateKey] = {
+        rich_text: [{ text: { content: todayISODate() } }],
+      };
+    }
+  }
+
   await notionFetch(token, `pages/${pageId}`, "PATCH", { properties: propPayload });
-  return { ok: true };
+
+  const nextKind = normalizeStageStatusForAutomation(value);
+  const prevKind = normalizeStageStatusForAutomation(previousRaw);
+  if (nextKind !== prevKind) {
+    await maybeCreateTodosForStageStatus(
+      {
+        id: pageId,
+        title: propText(props[jobTitleKey]) || propText(props["Name"]) || "",
+        company: propText(props[companyKey]) || "",
+        closeDate: propText(props[closeDateKey]) || "",
+        url: propText(props[urlKey]) || "",
+      },
+      nextKind
+    );
+  }
+
+  return { ok: true, previousStatus: previousRaw, newStatus: value, statusKind: nextKind };
 }
 
 async function checkTodoDb() {
@@ -2030,6 +2652,62 @@ async function getStageStatusStats() {
     [STAGE_STATS_CACHE_KEY]: { at: Date.now(), data: result },
   });
   return result;
+}
+
+async function getStageWeeklyKpis() {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const rows = await listDbRows(token, normalizedDbId, null);
+  const statusKey = map.status || "Status";
+  const applicationDateKey = map.applicationDate || "Application Date";
+  const statusProp = db.properties?.[statusKey];
+  if (!statusProp) throw new Error("Colonne Status introuvable dans la base.");
+
+  let addedWeek = 0;
+  let sentWeek = 0;
+  const counts = new Map();
+
+  rows.forEach((r) => {
+    const p = r.properties || {};
+    if (isDateInCurrentWeek(r.created_time)) {
+      addedWeek += 1;
+    }
+    if (isDateInCurrentWeek(propText(p[applicationDateKey]) || "")) {
+      sentWeek += 1;
+    }
+    const status = propText(p[statusKey]) || "Non renseigne";
+    counts.set(status, (counts.get(status) || 0) + 1);
+  });
+
+  const total = rows.length || 1;
+  const progressByStatus = Array.from(counts.entries())
+    .map(([status, count]) => ({
+      status,
+      count,
+      ratio: Math.round((count / total) * 100),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    ok: true,
+    weekStart: startOfWeek(new Date()).toISOString().slice(0, 10),
+    total: rows.length,
+    addedWeek,
+    sentWeek,
+    progressByStatus,
+  };
 }
 
 async function listStageDeadlines() {
@@ -2402,10 +3080,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
   }
 
+  if (msg?.type === "GET_STAGE_WEEKLY_KPIS") {
+    return respondWith(getStageWeeklyKpis(), sendResponse, "Notion - KPI hebdo stages", {
+      syncName: "notionStageKpis",
+    });
+  }
+
   if (msg?.type === "GET_STAGE_DEADLINES") {
     return respondWith(listStageDeadlines(), sendResponse, "Notion - deadlines stages", {
       syncName: "notionStageDeadlines",
     });
+  }
+
+  if (msg?.type === "GET_STAGE_BLOCKERS") {
+    return respondWith(getStageBlockers(), sendResponse, "Notion - SLA blocages stages", {
+      syncName: "notionStageBlockers",
+    });
+  }
+
+  if (msg?.type === "GET_STAGE_DATA_QUALITY") {
+    return respondWith(getStageDataQuality(), sendResponse, "Notion - qualite donnees stages", {
+      syncName: "notionStageQuality",
+    });
+  }
+
+  if (msg?.type === "APPLY_STAGE_QUALITY_FIX") {
+    return respondWith(
+      applyStageQualityFix(msg?.payload),
+      sendResponse,
+      "Notion - appliquer correction qualite",
+      { syncName: "notionStageQualityFix" }
+    );
   }
 
   if (msg?.type === "LIST_TODO_NOTION") {
@@ -2706,6 +3411,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg?.type === "GCAL_GET_REMINDER_PREFS") {
+    chrome.storage.local.get([GCAL_REMINDER_PREFS_KEY], (data) => {
+      const prefs = normalizeReminderPrefs(data?.[GCAL_REMINDER_PREFS_KEY]);
+      sendResponse({ ok: true, prefs });
+    });
+    return true;
+  }
+
+  if (msg?.type === "GCAL_SET_REMINDER_PREFS") {
+    const prefs = normalizeReminderPrefs(msg?.payload?.prefs);
+    chrome.storage.local.set({ [GCAL_REMINDER_PREFS_KEY]: prefs }, () => {
+      sendResponse({ ok: true, prefs });
+    });
+    return true;
+  }
+
+  if (msg?.type === "GCAL_SNOOZE_CUSTOM") {
+    return respondWith(
+      scheduleCustomGcalSnooze(msg?.payload),
+      sendResponse,
+      "Google Calendar - snooze manuel",
+      { syncName: "gcalSnooze" }
+    );
+  }
+
   if (msg?.type === "GET_YAHOO_NEWS") {
     return respondWith(
       getYahooNews(false).then((data) => ({ ok: true, data })),
@@ -2790,8 +3520,102 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true;
 });
 
+function createGcalNotification(notificationId, data) {
+  const startText = data?.start ? new Date(data.start).toLocaleString() : "";
+  const typeLabel =
+    data?.eventType === "deadline"
+      ? "Deadline"
+      : data?.eventType === "entretien"
+        ? "Entretien"
+        : data?.eventType === "meeting"
+          ? "Reunion"
+          : "Evenement";
+  const title = `${typeLabel}: ${data?.summary || "Evenement"}`;
+  const mins = Number.parseInt(data?.minutesBefore || "0", 10);
+  const prefix = Number.isFinite(mins) && mins > 0 ? `${mins} min - ` : "";
+  const message = startText ? `${prefix}${startText}` : "Evenement a venir";
+
+  chrome.notifications.create(notificationId, {
+    type: "basic",
+    iconUrl: "icons/icon-128.png",
+    title,
+    message,
+    priority: 2,
+    buttons: [{ title: "Snooze 15 min" }, { title: "Snooze 1h" }],
+  });
+}
+
+async function notifySlaBlockers() {
+  const res = await getStageBlockers();
+  if (!res?.ok) return;
+  const items = Array.isArray(res.items) ? res.items : [];
+  if (!items.length) return;
+  const top = items.slice(0, 3);
+  const title = `${items.length} blocage(s) de process`;
+  const message = top
+    .map((i) => `${i.company || "Entreprise"} - ${i.title || "Stage"} (${i.stagnantDays}j)`)
+    .join(" | ")
+    .slice(0, 250);
+  chrome.notifications.create(`sla|${Date.now()}`, {
+    type: "basic",
+    iconUrl: "icons/icon-128.png",
+    title,
+    message,
+    priority: 2,
+  });
+}
+
+async function scheduleGcalSnooze(notificationId, minutes) {
+  const when = Date.now() + minutes * 60 * 1000;
+  const alarmName = `${GCAL_SNOOZE_ALARM_PREFIX}${notificationId}|${minutes}|${Date.now()}`;
+  const { gcalEventMap } = await chrome.storage.local.get(["gcalEventMap"]);
+  const source = gcalEventMap?.[notificationId];
+  if (!source) return;
+  await chrome.storage.local.set({
+    [alarmName]: {
+      ...source,
+      snoozeMinutes: minutes,
+      sourceNotificationId: notificationId,
+    },
+  });
+  chrome.alarms.create(alarmName, { when });
+}
+
+async function scheduleCustomGcalSnooze(payload) {
+  const minutes = Number.parseInt(payload?.minutes, 10);
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    throw new Error("Minutes de snooze invalides.");
+  }
+  const when = Date.now() + minutes * 60 * 1000;
+  const sourceId = `manual|${Date.now()}|${Math.random().toString(16).slice(2)}`;
+  const alarmName = `${GCAL_SNOOZE_ALARM_PREFIX}${sourceId}|${minutes}`;
+  const data = {
+    summary: payload?.summary || "Evenement",
+    start: payload?.start || "",
+    minutesBefore: 0,
+    link: payload?.link || "",
+    eventType: payload?.eventType || "default",
+  };
+  await chrome.storage.local.set({ [alarmName]: data });
+  chrome.alarms.create(alarmName, { when });
+  return { ok: true };
+}
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!alarm?.name) return;
+  if (alarm.name === STAGE_SLA_ALARM) {
+    notifySlaBlockers().catch(() => {});
+    return;
+  }
+  if (alarm.name.startsWith(GCAL_SNOOZE_ALARM_PREFIX)) {
+    chrome.storage.local.get([alarm.name], (data) => {
+      const info = data[alarm.name];
+      if (!info) return;
+      createGcalNotification(alarm.name, info);
+    });
+    return;
+  }
+
   if (alarm.name === GCAL_SYNC_ALARM) {
     const now = new Date();
     const timeMin = toIsoStringLocal(now);
@@ -2883,17 +3707,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     return;
   }
 
-  const startText = data.start ? new Date(data.start).toLocaleString() : "";
-  const title = data.summary || "Evenement";
-  const message = startText ? `Commence a ${startText}` : "Evenement a venir";
-
-  chrome.notifications.create(alarm.name, {
-    type: "basic",
-    iconUrl: "icons/icon-128.png",
-    title,
-    message,
-    priority: 2,
-  });
+  createGcalNotification(alarm.name, data);
 
   notified[key] = Date.now();
   await chrome.storage.local.set({ gcalNotified: notified });
@@ -2923,19 +3737,70 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
+  chrome.alarms.create(STAGE_SLA_ALARM, { periodInMinutes: 720 });
   flushOfflineQueue();
   ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
 });
 
 chrome.notifications.onClicked.addListener((notificationId) => {
-  if (!notificationId?.startsWith(INTERVIEW_ALARM_PREFIX)) return;
-  chrome.storage.local.get([notificationId], (data) => {
-    const info = data[notificationId];
-    const link = info?.link || "";
-    if (link && chrome?.tabs?.create) {
-      chrome.tabs.create({ url: link });
-    }
-  });
+  if (!notificationId) return;
+  if (notificationId.startsWith(INTERVIEW_ALARM_PREFIX)) {
+    chrome.storage.local.get([notificationId], (data) => {
+      const info = data[notificationId];
+      const link = info?.link || "";
+      if (link && chrome?.tabs?.create) {
+        chrome.tabs.create({ url: link });
+      }
+    });
+    return;
+  }
+  if (notificationId.startsWith(GCAL_ALARM_PREFIX) || notificationId.startsWith(GCAL_SNOOZE_ALARM_PREFIX)) {
+    chrome.storage.local.get(["gcalEventMap", notificationId], (data) => {
+      const info = data[notificationId] || data?.gcalEventMap?.[notificationId];
+      const link = info?.link || "";
+      if (link && chrome?.tabs?.create) {
+        chrome.tabs.create({ url: link });
+      } else if (chrome?.tabs?.create) {
+        chrome.tabs.create({ url: "calendar.html" });
+      }
+    });
+    return;
+  }
+  if (notificationId.startsWith(DEADLINE_ALARM_PREFIX)) {
+    chrome.storage.local.get([notificationId], (data) => {
+      const info = data[notificationId];
+      const link = info?.url || "";
+      if (link && chrome?.tabs?.create) {
+        chrome.tabs.create({ url: link });
+      }
+    });
+  }
+});
+
+chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+  if (!notificationId) {
+    return;
+  }
+  const minutes = buttonIndex === 0 ? 15 : 60;
+  if (notificationId.startsWith(GCAL_ALARM_PREFIX)) {
+    scheduleGcalSnooze(notificationId, minutes).catch(() => {});
+    chrome.notifications.clear(notificationId);
+    return;
+  }
+  if (notificationId.startsWith(GCAL_SNOOZE_ALARM_PREFIX)) {
+    chrome.storage.local.get([notificationId], (data) => {
+      const info = data?.[notificationId];
+      if (!info) return;
+      scheduleCustomGcalSnooze({
+        summary: info.summary || "Evenement",
+        start: info.start || "",
+        link: info.link || "",
+        eventType: info.eventType || "default",
+        minutes,
+      }).catch(() => {});
+    });
+  }
+  chrome.notifications.clear(notificationId);
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -2943,6 +3808,7 @@ chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
+  chrome.alarms.create(STAGE_SLA_ALARM, { periodInMinutes: 720 });
   flushOfflineQueue();
   ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
 });
@@ -2954,19 +3820,186 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (!changeInfo.url) return;
-  chrome.storage.local
-    .get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY])
-    .then((data) => {
-      if (data[URL_BLOCKER_ENABLED_KEY] === false) return;
-      const filters = normalizeUrlBlockerRules(data[URL_BLOCKER_RULES_KEY] || []);
-      if (!filters.length) return;
-      if (shouldBlockUrl(changeInfo.url, filters)) {
-        chrome.tabs.remove(tabId).catch(() => {});
+function isPipelineSourceUrl(url) {
+  const lower = String(url || "").toLowerCase();
+  return (
+    lower.includes("linkedin.com/jobs") ||
+    lower.includes("welcometothejungle.com") ||
+    lower.includes("jobteaser.com")
+  );
+}
+
+function buildPipelineFingerprint(payload) {
+  const url = normalizeCompareText(payload?.url || "");
+  const title = normalizeCompareText(payload?.title || "");
+  const company = normalizeCompareText(payload?.company || "");
+  return url || `${title}|${company}`;
+}
+
+async function shouldSkipRecentPipelineImport(fingerprint) {
+  if (!fingerprint) return true;
+  const { [PIPELINE_RECENT_IMPORTS_KEY]: raw } = await chrome.storage.local.get([
+    PIPELINE_RECENT_IMPORTS_KEY,
+  ]);
+  const map = raw && typeof raw === "object" ? raw : {};
+  const now = Date.now();
+  const recentAt = map[fingerprint] || 0;
+  if (now - recentAt < 6 * 60 * 60 * 1000) return true;
+  map[fingerprint] = now;
+  const entries = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 500);
+  const trimmed = Object.fromEntries(entries);
+  await chrome.storage.local.set({ [PIPELINE_RECENT_IMPORTS_KEY]: trimmed });
+  return false;
+}
+
+async function autoImportFromTab(tabId, url) {
+  if (!isPipelineSourceUrl(url)) return;
+  const { [PIPELINE_AUTO_IMPORT_KEY]: enabled } = await chrome.storage.local.get([
+    PIPELINE_AUTO_IMPORT_KEY,
+  ]);
+  if (enabled === false) return;
+
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const normalize = (v) => (v ?? "").toString().trim();
+      const host = location.hostname.toLowerCase();
+      const toText = (el) => normalize(el?.textContent || "");
+      const fromSelectors = (selectors) =>
+        selectors
+          .map((s) => toText(document.querySelector(s)))
+          .find(Boolean) || "";
+      const fromMeta = (name) =>
+        normalize(
+          document.querySelector(`meta[property="${name}"]`)?.content ||
+            document.querySelector(`meta[name="${name}"]`)?.content ||
+            ""
+        );
+      const parseJsonLd = () => {
+        const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+        for (const script of scripts) {
+          try {
+            const parsed = JSON.parse(script.textContent || "{}");
+            const list = Array.isArray(parsed) ? parsed : [parsed];
+            for (const node of list) {
+              const t = normalize((node && (node["@type"] || node.type)) || "").toLowerCase();
+              if (!t.includes("jobposting")) continue;
+              const company =
+                normalize(node?.hiringOrganization?.name || "") ||
+                normalize(node?.hiringOrganization || "");
+              return {
+                title: normalize(node?.title || ""),
+                company,
+                location: normalize(
+                  node?.jobLocation?.address?.addressLocality ||
+                    node?.jobLocation?.name ||
+                    ""
+                ),
+                description: normalize(node?.description || ""),
+                deadline: normalize(node?.validThrough || ""),
+              };
+            }
+          } catch (_) {
+            // ignore invalid json-ld
+          }
+        }
+        return null;
+      };
+
+      const jsonLd = parseJsonLd();
+      const ogTitle = fromMeta("og:title");
+      const ogDesc = fromMeta("og:description") || fromMeta("description");
+      const title =
+        fromSelectors(["h1", ".job-title", "[data-testid='job-title']"]) ||
+        jsonLd?.title ||
+        ogTitle ||
+        normalize(document.title || "");
+
+      let company = "";
+      let locationText = "";
+      if (host.includes("linkedin.com")) {
+        company = fromSelectors([
+          '[data-test-id="job-details-company-name"]',
+          ".jobs-unified-top-card__company-name",
+          '[data-testid="company-name"]',
+        ]);
+        locationText = fromSelectors([
+          ".jobs-unified-top-card__bullet",
+          '[data-testid="job-location"]',
+        ]);
+      } else if (host.includes("welcometothejungle.com")) {
+        company = fromSelectors([
+          '[data-testid="company-name"]',
+          "a[href*='/companies/']",
+          ".sc-1n9xk8f-0",
+        ]);
+        locationText = fromSelectors([
+          '[data-testid="job-location"]',
+          "[class*='location']",
+        ]);
+      } else if (host.includes("jobteaser.com")) {
+        company = fromSelectors([
+          '[data-testid=\"company-name\"]',
+          "a[href*='/companies/']",
+          ".company-name",
+        ]);
+        locationText = fromSelectors(["[data-testid='job-location']", ".job-location"]);
       }
-    })
-    .catch(() => {});
+      if (!company) company = jsonLd?.company || "";
+      if (!locationText) locationText = jsonLd?.location || "";
+      const desc =
+        fromSelectors([
+          ".jobs-description-content__text",
+          '[data-testid=\"job-description\"]',
+          ".job-description",
+          "main article",
+        ]) ||
+        jsonLd?.description ||
+        normalize(ogDesc);
+      return {
+        title,
+        company,
+        location: locationText,
+        description: desc.slice(0, 1200),
+        url: location.href,
+        source: host.toLowerCase(),
+        deadline: jsonLd?.deadline || "",
+        applied: false,
+      };
+    },
+  });
+  const payload = result || {};
+  payload.title = normalizeText(payload.title || "");
+  payload.company = normalizeText(payload.company || inferCompanyFromUrl(payload.url || ""));
+  payload.url = normalizeText(payload.url || url);
+  payload.description = normalizeText(payload.description || "");
+  payload.source = normalizeText(payload.source || "");
+  if (!payload.title || !payload.url) return;
+
+  const fp = buildPipelineFingerprint(payload);
+  if (await shouldSkipRecentPipelineImport(fp)) return;
+  await upsertToNotion(payload);
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const candidateUrl = changeInfo.url || tab?.url || "";
+  if (!candidateUrl) return;
+  if (changeInfo.url) {
+    chrome.storage.local
+      .get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY])
+      .then((data) => {
+        if (data[URL_BLOCKER_ENABLED_KEY] === false) return;
+        const filters = normalizeUrlBlockerRules(data[URL_BLOCKER_RULES_KEY] || []);
+        if (!filters.length) return;
+        if (shouldBlockUrl(candidateUrl, filters)) {
+          chrome.tabs.remove(tabId).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+  if (changeInfo.url || changeInfo.status === "complete") {
+    autoImportFromTab(tabId, candidateUrl).catch(() => {});
+  }
 });
 
 

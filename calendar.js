@@ -68,9 +68,15 @@ let calendarFilterId = "all";
 let sortMode = "start-asc";
 let lastEvents = [];
 const CAL_LAST_REFRESH_KEY = "calendarLastRefresh";
+const EXTERNAL_ICAL_URL_KEY = "externalIcalUrl";
+const EXTERNAL_ICAL_CAL_ID = "external-ical";
+const EXTERNAL_ICAL_CAL_NAME = "Calendrier externe (iCal)";
+const EXTERNAL_ICAL_CAL_COLOR = "#14b8a6";
 let activeDateInput = null;
 let activePickerMode = "date";
 let dpMonth = new Date();
+let eventPopoverEl = null;
+let eventPopoverHideTimer = null;
 
 function todayLocalDateInput() {
   const d = new Date();
@@ -83,6 +89,245 @@ function todayLocalDateInput() {
 function normalizeText(input) {
   const text = (input ?? "").toString();
   return text.normalize("NFC").trim();
+}
+
+function parseIcalParams(parts) {
+  const params = {};
+  parts.forEach((part) => {
+    const idx = part.indexOf("=");
+    if (idx === -1) return;
+    const key = part.slice(0, idx).trim().toUpperCase();
+    const value = part.slice(idx + 1).trim();
+    if (!key) return;
+    params[key] = value;
+  });
+  return params;
+}
+
+function unfoldIcalLines(icsText) {
+  const raw = String(icsText || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n");
+  const lines = [];
+  raw.forEach((line) => {
+    if ((line.startsWith(" ") || line.startsWith("\t")) && lines.length > 0) {
+      lines[lines.length - 1] += line.slice(1);
+    } else {
+      lines.push(line);
+    }
+  });
+  return lines;
+}
+
+function unescapeIcalText(value) {
+  return String(value || "")
+    .replace(/\\n/gi, "\n")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";")
+    .replace(/\\\\/g, "\\");
+}
+
+function parseIcalDateValue(value, params = {}) {
+  const raw = String(value || "").trim();
+  if (!raw) return { value: "", date: null, allDay: false };
+
+  const isDateOnly = String(params.VALUE || "").toUpperCase() === "DATE" || /^\d{8}$/.test(raw);
+  if (isDateOnly) {
+    const m = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (!m) return { value: "", date: null, allDay: true };
+    const y = Number.parseInt(m[1], 10);
+    const mon = Number.parseInt(m[2], 10);
+    const d = Number.parseInt(m[3], 10);
+    const date = new Date(y, mon - 1, d);
+    if (Number.isNaN(date.getTime())) return { value: "", date: null, allDay: true };
+    return {
+      value: `${y}-${String(mon).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+      date,
+      allDay: true,
+    };
+  }
+
+  const m = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/);
+  if (!m) return { value: "", date: null, allDay: false };
+  const y = Number.parseInt(m[1], 10);
+  const mon = Number.parseInt(m[2], 10);
+  const d = Number.parseInt(m[3], 10);
+  const h = Number.parseInt(m[4], 10);
+  const min = Number.parseInt(m[5], 10);
+  const s = Number.parseInt(m[6] || "0", 10);
+  const utc = m[7] === "Z";
+  const date = utc
+    ? new Date(Date.UTC(y, mon - 1, d, h, min, s))
+    : new Date(y, mon - 1, d, h, min, s);
+  if (Number.isNaN(date.getTime())) return { value: "", date: null, allDay: false };
+  return { value: date.toISOString(), date, allDay: false };
+}
+
+function parseIcalEvents(icsText) {
+  const lines = unfoldIcalLines(icsText);
+  const events = [];
+  let current = null;
+
+  lines.forEach((line) => {
+    const text = String(line || "");
+    if (!text) return;
+    if (text === "BEGIN:VEVENT") {
+      current = {};
+      return;
+    }
+    if (text === "END:VEVENT") {
+      if (!current) return;
+      const startParsed = parseIcalDateValue(current.dtstart, current.dtstartParams);
+      if (!startParsed.value || !startParsed.date) {
+        current = null;
+        return;
+      }
+      const endParsed = parseIcalDateValue(current.dtend, current.dtendParams);
+      const endValue = endParsed.value || startParsed.value;
+      const idBase = current.uid || `${startParsed.value}|${current.summary || "event"}`;
+      const safeId = idBase.replace(/[^\w.-]+/g, "_");
+      events.push({
+        id: `ical-${safeId}`,
+        start: startParsed.value,
+        end: endValue,
+        startMs: startParsed.date.getTime(),
+        summary: unescapeIcalText(current.summary || "Evenement"),
+        location: unescapeIcalText(current.location || ""),
+        description: unescapeIcalText(current.description || ""),
+        url: normalizeUrl(current.url || ""),
+      });
+      current = null;
+      return;
+    }
+    if (!current) return;
+
+    const idx = text.indexOf(":");
+    if (idx === -1) return;
+    const rawKey = text.slice(0, idx);
+    const rawValue = text.slice(idx + 1);
+    const [name, ...paramParts] = rawKey.split(";");
+    const key = String(name || "").toUpperCase();
+    const params = parseIcalParams(paramParts);
+
+    if (key === "UID") current.uid = rawValue;
+    if (key === "SUMMARY") current.summary = rawValue;
+    if (key === "LOCATION") current.location = rawValue;
+    if (key === "DESCRIPTION") current.description = rawValue;
+    if (key === "URL") current.url = rawValue;
+    if (key === "DTSTART") {
+      current.dtstart = rawValue;
+      current.dtstartParams = params;
+    }
+    if (key === "DTEND") {
+      current.dtend = rawValue;
+      current.dtendParams = params;
+    }
+  });
+
+  return events;
+}
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (res) => {
+      if (chrome.runtime.lastError) {
+        resolve({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+      resolve(res || { ok: false, error: "inconnue" });
+    });
+  });
+}
+
+async function loadGoogleEventsSafe(timeMin, timeMax, calendarIds) {
+  if (!Array.isArray(calendarIds) || calendarIds.length === 0) {
+    return { ok: true, events: [] };
+  }
+  const res = await sendRuntimeMessage({
+    type: "GCAL_LOAD_EVENTS",
+    payload: { timeMin, timeMax, calendarIds },
+  });
+  if (!res?.ok) {
+    const error = res?.error || "inconnue";
+    return { ok: false, error, authRequired: error === "AUTH_REQUIRED", events: [] };
+  }
+  return { ok: true, events: Array.isArray(res.events) ? res.events : [] };
+}
+
+async function loadExternalIcalEventsSafe(timeMin, timeMax) {
+  const data = await chrome.storage.local.get([EXTERNAL_ICAL_URL_KEY]);
+  const sourceUrl = normalizeUrl(data?.[EXTERNAL_ICAL_URL_KEY] || "");
+  if (!sourceUrl) return { ok: true, hasSource: false, events: [] };
+
+  try {
+    const res = await fetch(sourceUrl, { cache: "no-store" });
+    if (!res.ok) {
+      return {
+        ok: false,
+        hasSource: true,
+        events: [],
+        error: `Flux iCal indisponible (HTTP ${res.status}).`,
+      };
+    }
+    const text = await res.text();
+    const parsed = parseIcalEvents(text);
+    const minMs = new Date(timeMin).getTime();
+    const maxMs = new Date(timeMax).getTime();
+    const events = parsed
+      .filter((ev) => Number.isFinite(ev.startMs) && ev.startMs >= minMs && ev.startMs <= maxMs)
+      .map((ev) => ({
+        id: ev.id,
+        summary: ev.summary || "Evenement",
+        location: ev.location || "",
+        start: ev.start,
+        end: ev.end,
+        calendarId: EXTERNAL_ICAL_CAL_ID,
+        calendarSummary: EXTERNAL_ICAL_CAL_NAME,
+        htmlLink: sourceUrl,
+        sourceUrl: ev.url || sourceUrl,
+        description: ev.description || "",
+        attendees: [],
+        meetingLink: ev.url || "",
+        sourceType: "ical",
+        eventType: detectEventType(ev),
+        tags: [],
+        readOnly: true,
+      }));
+    return { ok: true, hasSource: true, events };
+  } catch (err) {
+    return {
+      ok: false,
+      hasSource: true,
+      events: [],
+      error: err?.message || "Erreur lors du chargement du flux iCal.",
+    };
+  }
+}
+
+async function loadCombinedEvents(timeMin, timeMax, calendarIds) {
+  const [google, external] = await Promise.all([
+    loadGoogleEventsSafe(timeMin, timeMax, calendarIds),
+    loadExternalIcalEventsSafe(timeMin, timeMax),
+  ]);
+  const events = [...(google.events || []), ...(external.events || [])].sort(
+    (a, b) => new Date(a.start) - new Date(b.start)
+  );
+  return { google, external, events };
+}
+
+async function setCalendarFilterOptionsWithExternal(googleItems) {
+  const items = Array.isArray(googleItems) ? [...googleItems] : [];
+  const data = await chrome.storage.local.get([EXTERNAL_ICAL_URL_KEY]);
+  const sourceUrl = normalizeUrl(data?.[EXTERNAL_ICAL_URL_KEY] || "");
+  if (sourceUrl) {
+    items.push({
+      id: EXTERNAL_ICAL_CAL_ID,
+      summary: EXTERNAL_ICAL_CAL_NAME,
+      backgroundColor: EXTERNAL_ICAL_CAL_COLOR,
+    });
+  }
+  setCalendarFilterOptions(items);
 }
 
 function toDateTimeLocalValue(date) {
@@ -173,7 +418,7 @@ function setSubmittingEventForm(nextSubmitting) {
   isSubmittingEvent = !!nextSubmitting;
   if (eventSubmitBtn) {
     eventSubmitBtn.disabled = isSubmittingEvent;
-    eventSubmitBtn.textContent = isSubmittingEvent ? "Création..." : "Créer l’événement";
+    eventSubmitBtn.textContent = isSubmittingEvent ? "CrÃ©ation..." : "CrÃ©er lâ€™Ã©vÃ©nement";
   }
 }
 
@@ -196,7 +441,7 @@ function renderAttendeeChips() {
     const del = document.createElement("button");
     del.type = "button";
     del.setAttribute("aria-label", `Supprimer ${email}`);
-    del.textContent = "×";
+    del.textContent = "Ã—";
     del.addEventListener("click", () => {
       attendeeChips = attendeeChips.filter((e) => e !== email);
       renderAttendeeChips();
@@ -224,7 +469,7 @@ function verifyAttendeesField() {
     setAttendeesStatus(`Emails invalides: ${invalid.slice(0, 3).join(", ")}`, "error");
   } else {
     eventAttendeesEl.classList.add("attendees-valid");
-    setAttendeesStatus(`${attendees.length} invité(s) vérifié(s).`, "ok");
+    setAttendeesStatus(`${attendees.length} invitÃ©(s) vÃ©rifiÃ©(s).`, "ok");
   }
   return { attendees, invalid };
 }
@@ -321,7 +566,7 @@ function pickLocationSuggestion(item) {
   hideLocationSuggestions();
   setLocationLoading(false);
   setLocationValidityClass("ok");
-  setLocationStatus("Adresse suggérée validée.", "ok");
+  setLocationStatus("Adresse suggÃ©rÃ©e validÃ©e.", "ok");
 }
 
 function debounceLocationSuggestions(query) {
@@ -340,7 +585,7 @@ function debounceLocationSuggestions(query) {
         if (chrome.runtime.lastError) return;
         if (!res?.ok) {
           if (res?.code === "PLACES_KEY_MISSING") {
-            setLocationStatus("Ajoute une clé Google Places dans Options.", "error");
+            setLocationStatus("Ajoute une clÃ© Google Places dans Options.", "error");
             setLocationValidityClass("error");
           } else {
             const msg = res?.error || "";
@@ -373,15 +618,15 @@ function geocodeLocationOnBlur() {
       if (chrome.runtime.lastError) return;
       if (!res?.ok) {
         if (res?.code === "PLACES_KEY_MISSING") {
-          setLocationStatus("Ajoute une clé Google Places dans Options.", "error");
+          setLocationStatus("Ajoute une clÃ© Google Places dans Options.", "error");
         } else {
-          setLocationStatus(res?.error || "Adresse non vérifiée.", "error");
+          setLocationStatus(res?.error || "Adresse non vÃ©rifiÃ©e.", "error");
         }
         setLocationValidityClass("error");
         return;
       }
       if (!res.result) {
-        setLocationStatus("Adresse non trouvée.", "error");
+        setLocationStatus("Adresse non trouvÃ©e.", "error");
         setLocationValidityClass("error");
         return;
       }
@@ -393,7 +638,7 @@ function geocodeLocationOnBlur() {
       if (eventLocationEl && res.result.formattedAddress) {
         eventLocationEl.value = res.result.formattedAddress;
       }
-      setLocationStatus("Adresse vérifiée.", "ok");
+      setLocationStatus("Adresse vÃ©rifiÃ©e.", "ok");
       setLocationValidityClass("ok");
     }
   );
@@ -414,7 +659,7 @@ function resetEventFormAfterSuccess(message) {
   setLocationStatus("", null);
   setLocationValidityClass(null);
   prefillEventForm();
-  setEventFormStatus(message || "Opération réussie.", "ok");
+  setEventFormStatus(message || "OpÃ©ration rÃ©ussie.", "ok");
   toggleEventForm(false);
 }
 
@@ -438,7 +683,7 @@ function prefillFormFromEvent(ev) {
     if (normalizeText(ev.location || "")) {
       selectedLocationInfo = { description: ev.location || "", lat: null, lng: null };
       setLocationValidityClass("ok");
-      setLocationStatus("Adresse existante (non revalidée).", null);
+      setLocationStatus("Adresse existante (non revalidÃ©e).", null);
     } else {
       selectedLocationInfo = null;
       setLocationValidityClass(null);
@@ -487,6 +732,10 @@ function prefillFormFromEvent(ev) {
 }
 
 function startEditingEvent(ev) {
+  if (ev?.readOnly) {
+    setEventFormStatus("Evenement iCal en lecture seule.", "error");
+    return;
+  }
   editingEvent = ev;
   toggleEventForm(true);
   hideLocationSuggestions();
@@ -512,7 +761,7 @@ function toggleEventForm(forceOpen) {
   isEventFormOpen = nextOpen;
   eventFormCard.classList.toggle("form-hidden", !nextOpen);
   if (createEventBtn) {
-    createEventBtn.textContent = nextOpen ? "Fermer le formulaire" : "Créer un événement";
+    createEventBtn.textContent = nextOpen ? "Fermer le formulaire" : "CrÃ©er un Ã©vÃ©nement";
   }
 }
 
@@ -567,7 +816,7 @@ async function pickCalendarId() {
   );
 
   if (writableIds.size === 0) {
-    throw new Error("Aucun calendrier inscriptible (owner/writer) trouvé.");
+    throw new Error("Aucun calendrier inscriptible (owner/writer) trouvÃ©.");
   }
 
   if (gcalDefaultCalendar && writableIds.has(gcalDefaultCalendar)) {
@@ -621,16 +870,16 @@ async function submitCreateEvent() {
   const locationText = normalizeText(eventLocationEl?.value || "");
   if (locationText && !isLocationValidated()) {
     setEventFormStatus(
-      "Lieu non vérifié. Sélectionne une suggestion ou vérifie l’adresse.",
+      "Lieu non vÃ©rifiÃ©. SÃ©lectionne une suggestion ou vÃ©rifie lâ€™adresse.",
       "error"
     );
-    setLocationStatus("Adresse non vérifiée.", "error");
+    setLocationStatus("Adresse non vÃ©rifiÃ©e.", "error");
     setLocationValidityClass("error");
     return;
   }
 
   setSubmittingEventForm(true);
-  setEventFormStatus("Création en cours...", null);
+  setEventFormStatus("CrÃ©ation en cours...", null);
   let calendarId;
   try {
     calendarId = await pickCalendarId();
@@ -711,7 +960,7 @@ async function submitCreateEvent() {
           setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
           return;
         }
-        resetEventFormAfterSuccess("Événement mis à jour.");
+        resetEventFormAfterSuccess("Ã‰vÃ©nement mis Ã  jour.");
         loadEvents();
         loadNextEvents();
       }
@@ -736,7 +985,7 @@ async function submitCreateEvent() {
         return;
       }
       setSubmittingEventForm(false);
-      resetEventFormAfterSuccess("Événement créé.");
+      resetEventFormAfterSuccess("Ã‰vÃ©nement crÃ©Ã©.");
       loadEvents();
       loadNextEvents();
     }
@@ -1138,6 +1387,249 @@ function formatEventTime(ev) {
   return endStr ? `${startStr} - ${endStr}` : startStr;
 }
 
+function detectEventType(ev) {
+  const explicit = normalizeText(ev?.eventType || "").toLowerCase();
+  if (explicit) return explicit;
+  const text = `${ev?.summary || ""} ${ev?.description || ""} ${ev?.location || ""}`.toLowerCase();
+  if (/deadline|due|date limite/.test(text)) return "deadline";
+  if (/entretien|interview/.test(text)) return "entretien";
+  if (ev?.meetingLink) return "meeting";
+  return "default";
+}
+
+function getEventAccentColor(ev) {
+  if (!ev) return "#2563eb";
+  const sourceType = normalizeText(ev.sourceType || (ev.readOnly ? "ical" : "google")).toLowerCase();
+  const type = detectEventType(ev);
+  if (sourceType === "ical") return "#14b8a6";
+  if (type === "deadline") return "#f59e0b";
+  if (type === "entretien") return "#ef4444";
+  if (type === "meeting") return "#0ea5e9";
+  return getCalendarColor(ev.calendarId);
+}
+
+function formatTooltipDateTime(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value || "");
+  return d.toLocaleString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function buildEventHoverText(ev) {
+  const lines = [];
+  const title = normalizeText(ev?.summary || "Evenement");
+  lines.push(title);
+
+  if (ev?.calendarSummary) {
+    lines.push(`Calendrier: ${normalizeText(ev.calendarSummary)}`);
+  }
+
+  if (isAllDayEvent(ev)) {
+    const day = String(ev?.start || "");
+    lines.push(`Quand: ${day || "Toute la journÃ©e"}`);
+  } else {
+    const start = formatTooltipDateTime(ev?.start);
+    const end = formatTooltipDateTime(ev?.end);
+    if (start && end) lines.push(`Quand: ${start} -> ${end}`);
+    else if (start) lines.push(`Quand: ${start}`);
+  }
+
+  const location = normalizeText(ev?.location || "");
+  if (location) lines.push(`Lieu: ${location}`);
+
+  const description = normalizeText(String(ev?.description || "").replace(/\s+/g, " "));
+  if (description) {
+    const short = description.length > 300 ? `${description.slice(0, 297)}...` : description;
+    lines.push(`Description: ${short}`);
+  }
+
+  const attendees = Array.isArray(ev?.attendees) ? ev.attendees.filter(Boolean) : [];
+  if (attendees.length) {
+    lines.push(`Invites: ${attendees.slice(0, 8).join(", ")}${attendees.length > 8 ? "..." : ""}`);
+  }
+
+  const link = normalizeText(ev?.sourceUrl || "");
+  if (link) lines.push(`Lien: ${link}`);
+
+  const meetingLink = normalizeText(ev?.meetingLink || "");
+  if (meetingLink && meetingLink !== link) lines.push(`Visio: ${meetingLink}`);
+
+  if (ev?.readOnly) lines.push("Lecture seule (iCal)");
+
+  return lines.join("\n");
+}
+
+function ensureEventPopover() {
+  if (eventPopoverEl) return eventPopoverEl;
+  const pop = document.createElement("div");
+  pop.className = "event-popover";
+  document.body.appendChild(pop);
+  pop.addEventListener("mouseenter", () => {
+    if (eventPopoverHideTimer) clearTimeout(eventPopoverHideTimer);
+  });
+  pop.addEventListener("mouseleave", () => {
+    eventPopoverHideTimer = setTimeout(() => {
+      pop.classList.remove("visible");
+    }, 120);
+  });
+  eventPopoverEl = pop;
+  return pop;
+}
+
+function closeEventPopoverSoon() {
+  const pop = ensureEventPopover();
+  if (eventPopoverHideTimer) clearTimeout(eventPopoverHideTimer);
+  eventPopoverHideTimer = setTimeout(() => {
+    pop.classList.remove("visible");
+  }, 120);
+}
+
+function attachEventHoverPopover(anchorEl, ev) {
+  if (!anchorEl || !ev) return;
+  const pop = ensureEventPopover();
+  const eventType = detectEventType(ev);
+  const sourceType = normalizeText(ev.sourceType || (ev.readOnly ? "ical" : "google")).toLowerCase();
+  const eventTypeLabel =
+    eventType === "deadline"
+      ? "Deadline"
+      : eventType === "entretien"
+        ? "Entretien"
+        : eventType === "meeting"
+          ? "Reunion"
+          : "Evenement";
+  const sourceLabel = sourceType === "ical" ? "Source iCal" : "Source Google";
+
+  const createDetailRow = (label, value) => {
+    if (!value) return null;
+    const row = document.createElement("div");
+    row.className = "event-popover-row";
+    const lbl = document.createElement("div");
+    lbl.className = "event-popover-label";
+    lbl.textContent = label;
+    const val = document.createElement("div");
+    val.className = "event-popover-value";
+    val.textContent = value;
+    row.appendChild(lbl);
+    row.appendChild(val);
+    return row;
+  };
+
+  const show = () => {
+    if (eventPopoverHideTimer) clearTimeout(eventPopoverHideTimer);
+
+    const root = document.createElement("div");
+    const header = document.createElement("div");
+    header.className = "event-popover-header";
+    const title = document.createElement("div");
+    title.className = "event-popover-title";
+    title.textContent = normalizeText(ev.summary || "Evenement");
+    header.appendChild(title);
+
+    const badges = document.createElement("div");
+    badges.className = "event-popover-badges";
+    const typeBadge = document.createElement("span");
+    typeBadge.className = "event-popover-badge type";
+    typeBadge.textContent = eventTypeLabel;
+    badges.appendChild(typeBadge);
+    const sourceBadge = document.createElement("span");
+    sourceBadge.className = "event-popover-badge source";
+    sourceBadge.textContent = sourceLabel;
+    badges.appendChild(sourceBadge);
+    if (ev.readOnly) {
+      const readOnlyBadge = document.createElement("span");
+      readOnlyBadge.className = "event-popover-badge";
+      readOnlyBadge.textContent = "Lecture seule";
+      badges.appendChild(readOnlyBadge);
+    }
+    header.appendChild(badges);
+    root.appendChild(header);
+
+    const details = document.createElement("div");
+    details.className = "event-popover-details";
+    const whenText = isAllDayEvent(ev)
+      ? String(ev?.start || "Toute la journee")
+      : (() => {
+          const start = formatTooltipDateTime(ev?.start);
+          const end = formatTooltipDateTime(ev?.end);
+          return start && end ? `${start} -> ${end}` : start;
+        })();
+    const rows = [
+      createDetailRow("Calendrier", normalizeText(ev?.calendarSummary || "")),
+      createDetailRow("Quand", whenText),
+      createDetailRow("Lieu", normalizeText(ev?.location || "")),
+      createDetailRow("Description", normalizeText(String(ev?.description || "").replace(/\s+/g, " "))),
+      createDetailRow(
+        "Invites",
+        Array.isArray(ev?.attendees) ? ev.attendees.filter(Boolean).join(", ") : ""
+      ),
+      createDetailRow("Lien", normalizeText(ev?.sourceUrl || ev?.htmlLink || "")),
+      createDetailRow("Visio", normalizeText(ev?.meetingLink || "")),
+    ].filter(Boolean);
+    rows.forEach((row) => details.appendChild(row));
+    root.appendChild(details);
+
+    const actions = document.createElement("div");
+    actions.className = "event-popover-actions";
+
+    const makeBtn = (label, onClick, primary = false) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = label;
+      btn.className = `event-popover-btn${primary ? " primary" : ""}`;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onClick();
+      });
+      return btn;
+    };
+
+    const openUrl = ev.meetingLink || ev.sourceUrl || ev.htmlLink || "";
+    if (openUrl) {
+      actions.appendChild(
+        makeBtn("Ouvrir lien", () => window.open(openUrl, "_blank", "noreferrer"), true)
+      );
+    }
+
+    actions.appendChild(
+      makeBtn("Copier infos", () => {
+        const text = buildEventHoverText(ev);
+        if (navigator?.clipboard?.writeText) {
+          navigator.clipboard.writeText(text).then(
+            () => setEventFormStatus("Infos copiees.", "ok"),
+            () => setEventFormStatus("Copie impossible.", "error")
+          );
+        } else {
+          setEventFormStatus("Clipboard non disponible.", "error");
+        }
+      })
+    );
+
+    root.appendChild(actions);
+
+    pop.innerHTML = "";
+    pop.appendChild(root);
+    const rect = anchorEl.getBoundingClientRect();
+    const popWidth = Math.min(420, window.innerWidth - 16);
+    const preferRight = rect.right + 10 + popWidth <= window.innerWidth - 8;
+    const left = preferRight ? rect.right + 10 : Math.max(8, rect.left - popWidth - 10);
+    const top = Math.min(window.innerHeight - 220, Math.max(8, rect.top - 4));
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+    pop.classList.add("visible");
+  };
+
+  anchorEl.addEventListener("mouseenter", show);
+  anchorEl.addEventListener("focus", show);
+  anchorEl.addEventListener("mouseleave", closeEventPopoverSoon);
+  anchorEl.addEventListener("blur", closeEventPopoverSoon);
+}
+
 function isAllDayEvent(ev) {
   const start = String(ev.start || "");
   const end = String(ev.end || "");
@@ -1176,6 +1668,7 @@ function buildTimeAxis() {
 function attachDragToEvent(block, ev, dayDate, gridEl) {
   if (!block || !ev || !gridEl) return;
   if (isAllDayEvent(ev)) return;
+  if (ev.readOnly) return;
   if (!ev.calendarId || !ev.id) return;
 
   let pointerActive = false;
@@ -1235,7 +1728,7 @@ function attachDragToEvent(block, ev, dayDate, gridEl) {
           setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
           return;
         }
-        setEventFormStatus("Événement déplacé.", "ok");
+        setEventFormStatus("Ã‰vÃ©nement dÃ©placÃ©.", "ok");
         loadEvents();
         loadNextEvents();
       }
@@ -1253,6 +1746,7 @@ function attachDragToEvent(block, ev, dayDate, gridEl) {
 }
 
 function getCalendarColor(calendarId) {
+  if (calendarId === EXTERNAL_ICAL_CAL_ID) return EXTERNAL_ICAL_CAL_COLOR;
   const cal = calendars.find((c) => c.id === calendarId);
   return cal?.backgroundColor || "#2563eb";
 }
@@ -1376,8 +1870,10 @@ function passesFilters(ev) {
 function makeEventChip(ev) {
   const chip = document.createElement("div");
   chip.className = "event-chip";
-  chip.style.borderLeftColor = getCalendarColor(ev.calendarId);
+  chip.style.borderLeftColor = getEventAccentColor(ev);
   chip.tabIndex = 0;
+  chip.title = buildEventHoverText(ev);
+  attachEventHoverPopover(chip, ev);
 
   const title = document.createElement("div");
   title.className = "event-title";
@@ -1420,7 +1916,7 @@ function makeEventChip(ev) {
   if (Array.isArray(ev.tags) && ev.tags.length) {
     const tags = document.createElement("div");
     tags.className = "event-meta";
-    tags.textContent = ev.tags.join(" · ");
+    tags.textContent = ev.tags.join(" Â· ");
     chip.appendChild(tags);
   }
 
@@ -1434,58 +1930,64 @@ function makeEventChip(ev) {
     chip.appendChild(join);
   }
 
-  const actions = document.createElement("div");
-  actions.className = "event-actions";
+  if (ev.readOnly) {
+    const readOnlyMeta = document.createElement("div");
+    readOnlyMeta.className = "event-meta";
+    readOnlyMeta.textContent = "Lecture seule (iCal)";
+    chip.appendChild(readOnlyMeta);
+  } else {
+    const actions = document.createElement("div");
+    actions.className = "event-actions";
 
-  const editBtn = document.createElement("button");
-  editBtn.type = "button";
-  editBtn.className = "event-action";
-  editBtn.textContent = "Modifier";
-  editBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    startEditingEvent(ev);
-  });
-  actions.appendChild(editBtn);
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "event-action";
+    editBtn.textContent = "Modifier";
+    editBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      startEditingEvent(ev);
+    });
+    actions.appendChild(editBtn);
 
-  const delBtn = document.createElement("button");
-  delBtn.type = "button";
-  delBtn.className = "event-action danger";
-  delBtn.textContent = "Supprimer";
-  delBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const ok = window.confirm("Supprimer cet événement ?");
-    if (!ok) return;
-    const hasAttendees = Array.isArray(ev.attendees) && ev.attendees.length > 0;
-    chrome.runtime.sendMessage(
-      {
-        type: "GCAL_DELETE_EVENT",
-        payload: {
-          calendarId: ev.calendarId,
-          eventId: ev.id,
-          sendUpdates: hasAttendees ? "all" : "none",
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "event-action danger";
+    delBtn.textContent = "Supprimer";
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const ok = window.confirm("Supprimer cet Ã©vÃ©nement ?");
+      if (!ok) return;
+      const hasAttendees = Array.isArray(ev.attendees) && ev.attendees.length > 0;
+      chrome.runtime.sendMessage(
+        {
+          type: "GCAL_DELETE_EVENT",
+          payload: {
+            calendarId: ev.calendarId,
+            eventId: ev.id,
+            sendUpdates: hasAttendees ? "all" : "none",
+          },
         },
-      },
-      (res) => {
-        if (chrome.runtime.lastError) {
-          setEventFormStatus(`Erreur: ${chrome.runtime.lastError.message}`, "error");
-          return;
+        (res) => {
+          if (chrome.runtime.lastError) {
+            setEventFormStatus(`Erreur: ${chrome.runtime.lastError.message}`, "error");
+            return;
+          }
+          if (!res?.ok) {
+            setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
+            return;
+          }
+          if (editingEvent?.id === ev.id) {
+            editingEvent = null;
+          }
+          setEventFormStatus("Ã‰vÃ©nement supprimÃ©.", "ok");
+          loadEvents();
+          loadNextEvents();
         }
-        if (!res?.ok) {
-          setEventFormStatus(`Erreur: ${res?.error || "inconnue"}`, "error");
-          return;
-        }
-        if (editingEvent?.id === ev.id) {
-          editingEvent = null;
-        }
-        setEventFormStatus("Événement supprimé.", "ok");
-        loadEvents();
-        loadNextEvents();
-      }
-    );
-  });
-  actions.appendChild(delBtn);
-
-  chip.appendChild(actions);
+      );
+    });
+    actions.appendChild(delBtn);
+    chip.appendChild(actions);
+  }
 
   const openUrl = ev.meetingLink || ev.htmlLink || "";
   if (openUrl) {
@@ -1541,10 +2043,12 @@ function renderEvents(items) {
       const row = document.createElement("div");
       row.className = "agenda-item";
       row.tabIndex = 0;
+      row.title = buildEventHoverText(ev);
+      attachEventHoverPopover(row, ev);
 
       const dot = document.createElement("span");
       dot.className = "agenda-dot";
-      dot.style.background = getCalendarColor(ev.calendarId);
+      dot.style.background = getEventAccentColor(ev);
       row.appendChild(dot);
 
       const content = document.createElement("div");
@@ -1553,7 +2057,7 @@ function renderEvents(items) {
       title.textContent = normalizeText(ev.summary || "Evenement");
       const meta = document.createElement("div");
       meta.className = "agenda-meta";
-      meta.textContent = isAllDayEvent(ev) ? "Toute la journée" : formatEventTime(ev);
+      meta.textContent = isAllDayEvent(ev) ? "Toute la journÃ©e" : formatEventTime(ev);
       content.appendChild(title);
       content.appendChild(meta);
       row.appendChild(content);
@@ -1582,7 +2086,7 @@ function renderEvents(items) {
     allDayRow.className = "all-day-row";
     const allDayLabel = document.createElement("div");
     allDayLabel.className = "all-day-label";
-    allDayLabel.textContent = "Toute la journée";
+    allDayLabel.textContent = "Toute la journÃ©e";
     const allDayList = document.createElement("div");
     allDayList.className = "all-day-list";
     allDay.forEach((ev) => {
@@ -1621,7 +2125,7 @@ function renderEvents(items) {
       block.classList.add("event-block");
       block.style.top = `calc(var(--hour-height) * ${startMin / 60})`;
       block.style.height = `calc(var(--hour-height) * ${Math.max(15, endMin - startMin) / 60})`;
-      block.style.borderLeftColor = getCalendarColor(ev.calendarId);
+      block.style.borderLeftColor = getEventAccentColor(ev);
       attachDragToEvent(block, ev, baseDate, dayGrid);
       dayEventsLayer.appendChild(block);
     });
@@ -1655,7 +2159,7 @@ function renderEvents(items) {
     allDayRow.className = "week-all-day";
     const allDayLabel = document.createElement("div");
     allDayLabel.className = "all-day-label";
-    allDayLabel.textContent = "Toute la journée";
+    allDayLabel.textContent = "Toute la journÃ©e";
     allDayRow.appendChild(allDayLabel);
 
     for (let i = 0; i < 7; i += 1) {
@@ -1711,7 +2215,7 @@ function renderEvents(items) {
         block.classList.add("event-block");
         block.style.top = `calc(var(--hour-height) * ${startMin / 60})`;
         block.style.height = `calc(var(--hour-height) * ${Math.max(15, endMin - startMin) / 60})`;
-        block.style.borderLeftColor = getCalendarColor(ev.calendarId);
+        block.style.borderLeftColor = getEventAccentColor(ev);
         attachDragToEvent(block, ev, start, weekDays);
         layer.appendChild(block);
       });
@@ -1767,6 +2271,9 @@ function renderEvents(items) {
       const item = document.createElement("div");
       item.className = "month-event";
       item.textContent = normalizeText(ev.summary || "Evenement");
+      item.title = buildEventHoverText(ev);
+      item.tabIndex = 0;
+      attachEventHoverPopover(item, ev);
       list.appendChild(item);
     });
     cell.appendChild(list);
@@ -1790,33 +2297,52 @@ function loadNextEvents() {
   const timeMin = now.toISOString();
   const timeMax = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
   nextStatusEl.textContent = "Chargement...";
+  (async () => {
+    const combined = await loadCombinedEvents(timeMin, timeMax, selectedIds);
+    const hasGoogleEvents = (combined.google.events || []).length > 0;
+    const hasExternalEvents = (combined.external.events || []).length > 0;
+    const filtered = sortEvents((combined.events || []).filter(passesFilters));
+    renderNextEvents(filtered.slice(0, 3));
 
-  chrome.runtime.sendMessage(
-    { type: "GCAL_LOAD_EVENTS", payload: { timeMin, timeMax, calendarIds: selectedIds } },
-    (res) => {
-      if (chrome.runtime.lastError) {
-        nextStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-        return;
-      }
-      if (!res?.ok) {
-        const err = res?.error || "inconnue";
-        nextStatusEl.textContent =
-          err === "AUTH_REQUIRED"
-            ? "Non connecte. Connecte Google dans Options."
-            : `Erreur: ${err}`;
-        return;
-      }
-      const filtered = sortEvents((res.events || []).filter(passesFilters));
-      renderNextEvents(filtered.slice(0, 3));
+    if (!combined.google.ok && !hasGoogleEvents && !combined.external.hasSource) {
+      nextStatusEl.textContent =
+        combined.google.authRequired === true
+          ? "Non connecte. Connecte Google dans Options."
+          : `Erreur: ${combined.google.error || "inconnue"}`;
+      return;
     }
-  );
+    if (!combined.external.ok && !hasExternalEvents && !hasGoogleEvents) {
+      nextStatusEl.textContent = `Erreur: ${combined.external.error || "iCal indisponible"}`;
+      return;
+    }
+    if (!combined.google.ok && hasExternalEvents) {
+      nextStatusEl.textContent = "Google indisponible. Flux iCal affichÃ©.";
+      return;
+    }
+    if (!combined.external.ok && hasGoogleEvents) {
+      nextStatusEl.textContent = "Flux iCal indisponible. Google affichÃ©.";
+    }
+  })();
 }
 
 function loadCalendars() {
   calendarStatusEl.textContent = "Chargement...";
   chrome.runtime.sendMessage({ type: "GCAL_AUTH_STATUS" }, (auth) => {
     if (!auth?.connected) {
-      calendarStatusEl.textContent = "Non connecte. Connecte Google dans Options.";
+      calendars = [];
+      selectedIds = [];
+      renderCalendars(calendars);
+      notifyIds = [];
+      renderNotifyCalendars(calendars);
+      setCalendarFilterOptionsWithExternal(calendars);
+      chrome.storage.local.get([EXTERNAL_ICAL_URL_KEY], (data) => {
+        const sourceUrl = normalizeUrl(data?.[EXTERNAL_ICAL_URL_KEY] || "");
+        calendarStatusEl.textContent = sourceUrl
+          ? "Google non connecte. Flux iCal externe actif."
+          : "Non connecte. Connecte Google dans Options.";
+      });
+      loadEvents();
+      loadNextEvents();
       return;
     }
     chrome.runtime.sendMessage({ type: "GCAL_LIST_CALENDARS" }, (res) => {
@@ -1829,7 +2355,7 @@ function loadCalendars() {
         return;
       }
       calendars = res.items || [];
-      setCalendarFilterOptions(calendars);
+      setCalendarFilterOptionsWithExternal(calendars);
       chrome.storage.local.get(["gcalSelectedCalendars"], (data) => {
         const stored = Array.isArray(data.gcalSelectedCalendars) ? data.gcalSelectedCalendars : [];
         selectedIds = stored.length ? stored : calendars.map((c) => c.id);
@@ -1857,39 +2383,45 @@ function loadEvents() {
     const min = new Date(timeMin);
     const effectiveMin = min < now ? now : min;
     eventsStatusEl.textContent = "Chargement...";
+    (async () => {
+      const combined = await loadCombinedEvents(effectiveMin.toISOString(), timeMax, selectedIds);
+      const hasGoogleEvents = (combined.google.events || []).length > 0;
+      const hasExternalEvents = (combined.external.events || []).length > 0;
 
-    chrome.runtime.sendMessage(
-      {
-        type: "GCAL_LOAD_EVENTS",
-        payload: { timeMin: effectiveMin.toISOString(), timeMax, calendarIds: selectedIds },
-      },
-      (res) => {
-        if (chrome.runtime.lastError) {
-          eventsStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-          lastEvents = [];
-          return;
-        }
-      if (!res?.ok) {
-        const err = res?.error || "inconnue";
+      if (!combined.google.ok && !combined.external.hasSource && !hasGoogleEvents) {
+        const err = combined.google.error || "inconnue";
         eventsStatusEl.textContent =
-          err === "AUTH_REQUIRED"
+          combined.google.authRequired === true
             ? "Non connecte. Connecte Google dans Options."
             : `Erreur: ${err}`;
         lastEvents = [];
         return;
       }
-      lastEvents = res.events || [];
+      if (!combined.external.ok && !hasExternalEvents && !hasGoogleEvents) {
+        eventsStatusEl.textContent = `Erreur: ${combined.external.error || "iCal indisponible"}`;
+        lastEvents = [];
+        return;
+      }
+
+      if (!combined.google.ok && hasExternalEvents) {
+        eventsStatusEl.textContent = "Google indisponible. Flux iCal affichÃ©.";
+      } else if (!combined.external.ok && hasGoogleEvents) {
+        eventsStatusEl.textContent = "Flux iCal indisponible. Google affichÃ©.";
+      } else {
+        eventsStatusEl.textContent = "";
+      }
+
+      lastEvents = combined.events || [];
       updateLastRefresh(Date.now());
       renderEvents(lastEvents);
-    }
-  );
-}, 150);
+    })();
+  }, 150);
 }
 
 function manualRefresh() {
-  eventsStatusEl.textContent = "Rafraîchissement...";
+  eventsStatusEl.textContent = "RafraÃ®chissement...";
   chrome.runtime.sendMessage({ type: "GCAL_CLEAR_EVENT_CACHE" }, () => {
-    // Même si le clear échoue, on tente un rechargement.
+    // MÃªme si le clear Ã©choue, on tente un rechargement.
     lastEvents = [];
     loadEvents();
     loadNextEvents();
@@ -2083,6 +2615,9 @@ filterBtns.forEach((btn) => {
     loadNextEvents();
   });
 });
+
+document.addEventListener("scroll", closeEventPopoverSoon, true);
+window.addEventListener("resize", closeEventPopoverSoon);
 
 setInputDateValue(dateEl, new Date(), "date");
 loadCalendars();

@@ -24,6 +24,14 @@ self.EXTENSION_DEFAULTS = {
     gcalDefaultCalendar: "primary",
     gcalSelectedCalendars: [],
     gcalNotifyCalendars: [],
+    externalIcalUrl: "",
+    gcalReminderPrefs: {
+      default: [30],
+      meeting: [30],
+      entretien: [120, 30],
+      deadline: [1440, 60],
+    },
+    pipelineAutoImportEnabled: true,
 
     // News + widgets + focus
     yahooNewsPrefs: {

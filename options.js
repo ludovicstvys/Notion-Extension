@@ -8,11 +8,22 @@ const bdfApiKeyEl = document.getElementById("bdf-api-key");
 const googlePlacesApiKeyEl = document.getElementById("google-places-api-key");
 const todoDbEl = document.getElementById("todo-db");
 const todoStatusEl = document.getElementById("todo-status");
+const pipelineAutoImportEnabledEl = document.getElementById("pipeline-auto-import-enabled");
+const pipelineAutoImportStatusEl = document.getElementById("pipeline-auto-import-status");
 const gcalLoginBtn = document.getElementById("gcal-login");
 const gcalLogoutBtn = document.getElementById("gcal-logout");
 const gcalStatusEl = document.getElementById("gcal-status");
 const gcalDefaultEl = document.getElementById("gcal-default");
 const gcalRefreshBtn = document.getElementById("gcal-refresh");
+const gcalReminderDefaultEl = document.getElementById("gcal-reminder-default");
+const gcalReminderMeetingEl = document.getElementById("gcal-reminder-meeting");
+const gcalReminderEntretienEl = document.getElementById("gcal-reminder-entretien");
+const gcalReminderDeadlineEl = document.getElementById("gcal-reminder-deadline");
+const gcalReminderSaveBtn = document.getElementById("gcal-reminder-save");
+const gcalReminderStatusEl = document.getElementById("gcal-reminder-status");
+const externalIcalUrlEl = document.getElementById("external-ical-url");
+const externalIcalSaveBtn = document.getElementById("external-ical-save");
+const externalIcalStatusEl = document.getElementById("external-ical-status");
 const urlBlockerInputEl = document.getElementById("url-blocker-input");
 const urlBlockerListEl = document.getElementById("url-blocker-list");
 const urlBlockerSaveBtn = document.getElementById("url-blocker-save");
@@ -92,6 +103,20 @@ chrome.storage.local.get(["googlePlacesApiKey"], (v) => {
   if (googlePlacesApiKeyEl) {
     googlePlacesApiKeyEl.value =
       v.googlePlacesApiKey ?? LOCAL_DEFAULTS.googlePlacesApiKey ?? "";
+  }
+});
+chrome.storage.local.get(["pipelineAutoImportEnabled"], (v) => {
+  if (pipelineAutoImportEnabledEl) {
+    const enabled =
+      v.pipelineAutoImportEnabled !== undefined
+        ? v.pipelineAutoImportEnabled === true
+        : LOCAL_DEFAULTS.pipelineAutoImportEnabled !== false;
+    pipelineAutoImportEnabledEl.checked = enabled;
+    if (pipelineAutoImportStatusEl) {
+      pipelineAutoImportStatusEl.textContent = enabled
+        ? "Pipeline auto activé."
+        : "Pipeline auto désactivé.";
+    }
   }
 });
 let urlBlockerRules = [];
@@ -185,6 +210,31 @@ function normalizeDbId(input) {
   return "";
 }
 
+function normalizeHttpUrl(input) {
+  const raw = (input || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return url.toString();
+  } catch (_) {
+    return "";
+  }
+}
+
+function parseReminderOffsets(value) {
+  const list = String(value || "")
+    .split(",")
+    .map((s) => Number.parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return list.length ? list : [];
+}
+
+function formatReminderOffsets(list, fallback) {
+  const arr = Array.isArray(list) && list.length ? list : fallback;
+  return arr.join(",");
+}
+
 document.getElementById("save").addEventListener("click", async () => {
   const normalizedDbId = normalizeDbId(dbEl.value);
   if (!normalizedDbId) {
@@ -204,7 +254,13 @@ document.getElementById("save").addEventListener("click", async () => {
   });
   const bdfApiKey = bdfApiKeyEl?.value?.trim() || "";
   const googlePlacesApiKey = googlePlacesApiKeyEl?.value?.trim() || "";
-  await chrome.storage.local.set({ bdfApiKey, googlePlacesApiKey });
+  const pipelineAutoImportEnabled = !!pipelineAutoImportEnabledEl?.checked;
+  await chrome.storage.local.set({ bdfApiKey, googlePlacesApiKey, pipelineAutoImportEnabled });
+  if (pipelineAutoImportStatusEl) {
+    pipelineAutoImportStatusEl.textContent = pipelineAutoImportEnabled
+      ? "Pipeline auto activé."
+      : "Pipeline auto désactivé.";
+  }
 
   dbEl.value = normalizedDbId;
   if (todoDbEl && normalizedTodoDbId) todoDbEl.value = normalizedTodoDbId;
@@ -419,6 +475,63 @@ if (gcalRefreshBtn) {
 gcalDefaultEl?.addEventListener("change", () => {
   chrome.storage.local.set({ gcalDefaultCalendar: gcalDefaultEl.value });
 });
+
+function loadGcalReminderPrefs() {
+  chrome.runtime.sendMessage({ type: "GCAL_GET_REMINDER_PREFS" }, (res) => {
+    if (!res?.ok) return;
+    const prefs = res.prefs || {};
+    if (gcalReminderDefaultEl) gcalReminderDefaultEl.value = formatReminderOffsets(prefs.default, [30]);
+    if (gcalReminderMeetingEl) gcalReminderMeetingEl.value = formatReminderOffsets(prefs.meeting, [30]);
+    if (gcalReminderEntretienEl) {
+      gcalReminderEntretienEl.value = formatReminderOffsets(prefs.entretien, [120, 30]);
+    }
+    if (gcalReminderDeadlineEl) {
+      gcalReminderDeadlineEl.value = formatReminderOffsets(prefs.deadline, [1440, 60]);
+    }
+  });
+}
+
+if (gcalReminderSaveBtn) {
+  gcalReminderSaveBtn.addEventListener("click", () => {
+    const prefs = {
+      default: parseReminderOffsets(gcalReminderDefaultEl?.value || "30"),
+      meeting: parseReminderOffsets(gcalReminderMeetingEl?.value || "30"),
+      entretien: parseReminderOffsets(gcalReminderEntretienEl?.value || "120,30"),
+      deadline: parseReminderOffsets(gcalReminderDeadlineEl?.value || "1440,60"),
+    };
+    chrome.runtime.sendMessage({ type: "GCAL_SET_REMINDER_PREFS", payload: { prefs } }, (res) => {
+      if (!gcalReminderStatusEl) return;
+      gcalReminderStatusEl.textContent = res?.ok
+        ? "Rappels enregistrés."
+        : `Erreur: ${res?.error || "inconnue"}`;
+    });
+  });
+}
+
+loadGcalReminderPrefs();
+
+chrome.storage.local.get(["externalIcalUrl"], (data) => {
+  if (!externalIcalUrlEl) return;
+  externalIcalUrlEl.value = data.externalIcalUrl ?? LOCAL_DEFAULTS.externalIcalUrl ?? "";
+});
+
+if (externalIcalSaveBtn) {
+  externalIcalSaveBtn.addEventListener("click", async () => {
+    const raw = externalIcalUrlEl?.value || "";
+    const normalized = normalizeHttpUrl(raw);
+    if (raw.trim() && !normalized) {
+      if (externalIcalStatusEl) externalIcalStatusEl.textContent = "Lien invalide (http/https).";
+      return;
+    }
+    await chrome.storage.local.set({ externalIcalUrl: normalized });
+    if (externalIcalUrlEl) externalIcalUrlEl.value = normalized;
+    if (externalIcalStatusEl) {
+      externalIcalStatusEl.textContent = normalized
+        ? "Lien iCal enregistré."
+        : "Lien iCal supprimé.";
+    }
+  });
+}
 
 function refreshNotionSyncStatus() {
   if (!notionSyncEnabledEl) return;
@@ -801,31 +914,38 @@ if (diagClearErrorsBtn) {
 
 refreshDiagnostics(false);
 
+function fileStamp(d = new Date()) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}-${hh}${min}${ss}`;
+}
+
+function downloadTextFile(filename, content) {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function exportConfig() {
-  const syncData = await chrome.storage.sync.get([
-    "notionToken",
-    "notionDbId",
-    "notionTodoDbId",
-    "notionFieldMap",
-  ]);
-  const localData = await chrome.storage.local.get([
-    "gcalDefaultCalendar",
-    "gcalSelectedCalendars",
-    "gcalNotifyCalendars",
-    "yahooNewsPrefs",
-    "autoTagRules",
-    "deadlinePrefs",
-    "notionCalendarSyncEnabled",
-    "bdfApiKey",
-    "googlePlacesApiKey",
-    "urlBlockerRules",
-    "urlBlockerEnabled",
-    "dashboardWidgets",
-    "focusModeEnabled",
-    "pomodoroWork",
-    "pomodoroBreak",
-  ]);
-  return { sync: syncData, local: localData };
+  const syncData = await chrome.storage.sync.get(null);
+  const localData = await chrome.storage.local.get(null);
+  return {
+    format: "notion-extension-connections-v1",
+    exportedAt: new Date().toISOString(),
+    includesSensitiveData: true,
+    sync: syncData || {},
+    local: localData || {},
+  };
 }
 
 async function importConfig(obj) {
@@ -836,8 +956,14 @@ async function importConfig(obj) {
 if (exportBtn) {
   exportBtn.addEventListener("click", async () => {
     const data = await exportConfig();
-    if (configDataEl) configDataEl.value = JSON.stringify(data, null, 2);
-    if (configStatusEl) configStatusEl.textContent = "Configuration exportee.";
+    const text = JSON.stringify(data, null, 2);
+    if (configDataEl) configDataEl.value = text;
+    const filename = `connections-config-${fileStamp()}.txt`;
+    downloadTextFile(filename, text);
+    if (configStatusEl) {
+      configStatusEl.textContent =
+        "Configuration exportee en .txt (contient des donnees sensibles).";
+    }
   });
 }
 
@@ -869,9 +995,21 @@ if (importBtn) {
         widgetTodoNotionEl.checked = widgets.todoNotion !== false;
       }
       if (todoDbEl) todoDbEl.value = parsed?.sync?.notionTodoDbId || "";
+      if (externalIcalUrlEl) externalIcalUrlEl.value = parsed?.local?.externalIcalUrl || "";
+      if (parsed?.local?.gcalReminderPrefs) {
+        chrome.runtime.sendMessage({
+          type: "GCAL_SET_REMINDER_PREFS",
+          payload: { prefs: parsed.local.gcalReminderPrefs },
+        });
+        loadGcalReminderPrefs();
+      }
       if (focusEnabledEl) focusEnabledEl.checked = parsed?.local?.focusModeEnabled === true;
       if (pomodoroWorkEl) pomodoroWorkEl.value = String(parsed?.local?.pomodoroWork || 25);
       if (pomodoroBreakEl) pomodoroBreakEl.value = String(parsed?.local?.pomodoroBreak || 5);
+      if (pipelineAutoImportEnabledEl) {
+        pipelineAutoImportEnabledEl.checked =
+          parsed?.local?.pipelineAutoImportEnabled !== false;
+      }
       refreshColumns();
       refreshDiagnostics(false);
     } catch (e) {

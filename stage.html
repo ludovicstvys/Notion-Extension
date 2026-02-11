@@ -210,6 +210,23 @@
         border-color: rgba(245, 158, 11, 0.45);
         background: rgba(245, 158, 11, 0.12);
       }
+      .quick-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .quick-btn {
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.7);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 4px 8px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .quick-btn:hover {
+        border-color: rgba(56, 189, 248, 0.45);
+      }
       .stage-row a {
         color: var(--accent);
         text-decoration: none;
@@ -313,6 +330,15 @@
         border-radius: 999px;
         background: rgba(148, 163, 184, 0.2);
       }
+      .kanban-count.over-limit {
+        color: #fecaca;
+        background: rgba(239, 68, 68, 0.28);
+      }
+      .kanban-status {
+        margin: 6px 0 10px;
+        font-size: 12px;
+        color: #fca5a5;
+      }
       .kanban-card {
         background: linear-gradient(135deg, rgba(17, 24, 39, 0.9), rgba(11, 19, 36, 0.85));
         border: 1px solid var(--border);
@@ -321,6 +347,20 @@
         display: grid;
         gap: 6px;
         cursor: grab;
+      }
+      .kanban-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .kanban-action {
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        background: rgba(15, 23, 42, 0.7);
+        color: var(--text);
+        border-radius: 999px;
+        padding: 3px 8px;
+        font-size: 10px;
+        cursor: pointer;
       }
       .kanban-card.dragging {
         opacity: 0.6;
@@ -368,6 +408,24 @@
     </section>
 
     <section class="card">
+      <h2>KPI hebdo</h2>
+      <p class="note" id="stage-kpi-week">Semaine: -</p>
+      <div class="list" id="stage-kpi-list"></div>
+    </section>
+
+    <section class="card">
+      <h2>Blocages process (SLA)</h2>
+      <p class="note" id="stage-blockers-status">Chargement...</p>
+      <div class="list" id="stage-blockers-list"></div>
+    </section>
+
+    <section class="card">
+      <h2>Qualité des données</h2>
+      <p class="note" id="stage-quality-status">Chargement...</p>
+      <div class="list" id="stage-quality-list"></div>
+    </section>
+
+    <section class="card">
       <div class="stage-open-controls">
         <h2>Stages ouverts</h2>
         <button class="stage-open-toggle" id="stage-open-toggle" type="button">Minimiser</button>
@@ -381,17 +439,23 @@
         <button class="kanban-tab active" id="kanban-tab-list" type="button">Liste</button>
         <button class="kanban-tab" id="kanban-tab-board" type="button">Kanban</button>
       </div>
+      <p class="kanban-status" id="kanban-status"></p>
       <div id="kanban-view-list">
         <h2>Liste des stages</h2>
-      <input
-        class="stage-search"
-        id="stage-all-search"
-        type="search"
-        placeholder="Rechercher un stage..."
-        aria-label="Rechercher un stage"
-      />
-      <p class="note" id="stage-all-status">Chargement...</p>
-      <div class="list stage-all-list" id="stage-all-list"></div>
+        <input
+          class="stage-search"
+          id="stage-all-search"
+          type="search"
+          placeholder="Rechercher un stage..."
+          aria-label="Rechercher un stage"
+        />
+        <p class="note" id="stage-all-status">Chargement...</p>
+        <div class="list stage-all-list" id="stage-all-list"></div>
+      </div>
+      <div id="kanban-view-board" class="kanban-hidden">
+        <h2>Kanban des stages</h2>
+        <div class="kanban-board" id="kanban-board"></div>
+      </div>
     </section>
 
     <script src="stage.js"></script>

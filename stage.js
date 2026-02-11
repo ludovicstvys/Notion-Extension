@@ -13,6 +13,13 @@ const kanbanListTab = document.getElementById("kanban-tab-list");
 const kanbanBoardTab = document.getElementById("kanban-tab-board");
 const kanbanListView = document.getElementById("kanban-view-list");
 const kanbanBoardView = document.getElementById("kanban-view-board");
+const kanbanStatusEl = document.getElementById("kanban-status");
+const stageKpiWeekEl = document.getElementById("stage-kpi-week");
+const stageKpiListEl = document.getElementById("stage-kpi-list");
+const stageBlockersStatusEl = document.getElementById("stage-blockers-status");
+const stageBlockersListEl = document.getElementById("stage-blockers-list");
+const stageQualityStatusEl = document.getElementById("stage-quality-status");
+const stageQualityListEl = document.getElementById("stage-quality-list");
 
 let stats = null;
 let segments = [];
@@ -25,6 +32,12 @@ const KANBAN_COLUMNS = [
   { key: "entretien", label: "Entretien" },
   { key: "refuse", label: "Refusé" },
 ];
+const KANBAN_WIP_LIMITS = {
+  ouvert: 20,
+  candidature: 15,
+  entretien: 8,
+  refuse: 999,
+};
 
 function normalizeText(input) {
   const text = (input ?? "").toString();
@@ -40,6 +53,198 @@ function normalizeStatus(value) {
   return "ouvert";
 }
 
+function findColumnLabelByKey(key) {
+  const col = KANBAN_COLUMNS.find((c) => c.key === key);
+  return col?.label || "Ouvert";
+}
+
+function renderWeeklyKpis(data) {
+  if (!stageKpiWeekEl || !stageKpiListEl) return;
+  stageKpiListEl.innerHTML = "";
+  if (!data?.ok) {
+    stageKpiWeekEl.textContent = "Semaine: erreur";
+    return;
+  }
+  stageKpiWeekEl.textContent = `Semaine depuis ${data.weekStart || "-"}`;
+
+  const rows = [
+    `Stages ajoutés: ${data.addedWeek ?? 0}`,
+    `Candidatures envoyées: ${data.sentWeek ?? 0}`,
+    `Total stages: ${data.total ?? 0}`,
+  ];
+  rows.forEach((line) => {
+    const item = document.createElement("div");
+    item.className = "stage-row";
+    item.textContent = line;
+    stageKpiListEl.appendChild(item);
+  });
+
+  const top = Array.isArray(data.progressByStatus) ? data.progressByStatus.slice(0, 4) : [];
+  top.forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = "stage-row";
+    item.textContent = `${entry.status}: ${entry.count} (${entry.ratio}%)`;
+    stageKpiListEl.appendChild(item);
+  });
+}
+
+function loadWeeklyKpis() {
+  chrome.runtime.sendMessage({ type: "GET_STAGE_WEEKLY_KPIS" }, (res) => {
+    if (chrome.runtime.lastError) {
+      renderWeeklyKpis({ ok: false });
+      return;
+    }
+    renderWeeklyKpis(res);
+  });
+}
+
+function renderStageBlockers(items) {
+  if (!stageBlockersListEl) return;
+  stageBlockersListEl.innerHTML = "";
+  if (!items || items.length === 0) {
+    if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = "Aucun blocage détecté.";
+    return;
+  }
+  if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = `${items.length} blocage(s)`;
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "stage-row";
+    const title = document.createElement("div");
+    title.className = "stage-company";
+    title.textContent = normalizeText([item.company, item.title].filter(Boolean).join(" - ")) || "Stage";
+    row.appendChild(title);
+    const meta = document.createElement("div");
+    meta.className = "stage-role";
+    meta.textContent = `${item.reason} (${item.stagnantDays} jours)`;
+    row.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "quick-actions";
+    const nextBtn = document.createElement("button");
+    nextBtn.className = "quick-btn";
+    nextBtn.textContent = `Passer ${item.suggestedNextStatus}`;
+    nextBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      updateStageStatus(item.id, item.suggestedNextStatus);
+      loadStageBlockers();
+    });
+    actions.appendChild(nextBtn);
+    if (item.url) {
+      const openBtn = document.createElement("button");
+      openBtn.className = "quick-btn";
+      openBtn.textContent = "Ouvrir lien";
+      openBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        window.open(item.url, "_blank", "noreferrer");
+      });
+      actions.appendChild(openBtn);
+    }
+    row.appendChild(actions);
+    stageBlockersListEl.appendChild(row);
+  });
+}
+
+function loadStageBlockers() {
+  if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = "Chargement...";
+  chrome.runtime.sendMessage({ type: "GET_STAGE_BLOCKERS" }, (res) => {
+    if (chrome.runtime.lastError) {
+      if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
+      renderStageBlockers([]);
+      return;
+    }
+    if (!res?.ok) {
+      if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+      renderStageBlockers([]);
+      return;
+    }
+    renderStageBlockers(res.items || []);
+  });
+}
+
+function renderDataQualityIssues(items) {
+  if (!stageQualityListEl) return;
+  stageQualityListEl.innerHTML = "";
+  if (!items || items.length === 0) {
+    if (stageQualityStatusEl) stageQualityStatusEl.textContent = "Aucune anomalie.";
+    return;
+  }
+  if (stageQualityStatusEl) stageQualityStatusEl.textContent = `${items.length} point(s) à corriger`;
+  items.forEach((issue) => {
+    const row = document.createElement("div");
+    row.className = "stage-row";
+    const title = document.createElement("div");
+    title.className = "stage-company";
+    title.textContent = `${normalizeText(issue.title || "Stage")} - ${issue.field}`;
+    row.appendChild(title);
+    const meta = document.createElement("div");
+    meta.className = "stage-role";
+    meta.textContent = issue.suggestedValue
+      ? `Suggestion: ${issue.suggestedValue}`
+      : "Aucune suggestion automatique.";
+    row.appendChild(meta);
+    const actions = document.createElement("div");
+    actions.className = "quick-actions";
+    if (issue.suggestedValue) {
+      const applyBtn = document.createElement("button");
+      applyBtn.className = "quick-btn";
+      applyBtn.textContent = "Appliquer suggestion";
+      applyBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        chrome.runtime.sendMessage(
+          {
+            type: "APPLY_STAGE_QUALITY_FIX",
+            payload: { id: issue.id, field: issue.field, value: issue.suggestedValue },
+          },
+          () => loadStageDataQuality()
+        );
+      });
+      actions.appendChild(applyBtn);
+    }
+    row.appendChild(actions);
+    stageQualityListEl.appendChild(row);
+  });
+}
+
+function loadStageDataQuality() {
+  if (stageQualityStatusEl) stageQualityStatusEl.textContent = "Chargement...";
+  chrome.runtime.sendMessage({ type: "GET_STAGE_DATA_QUALITY" }, (res) => {
+    if (chrome.runtime.lastError) {
+      if (stageQualityStatusEl) stageQualityStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
+      renderDataQualityIssues([]);
+      return;
+    }
+    if (!res?.ok) {
+      if (stageQualityStatusEl) stageQualityStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+      renderDataQualityIssues([]);
+      return;
+    }
+    renderDataQualityIssues(res.items || []);
+  });
+}
+
+function makeKanbanQuickActions(item, colKey) {
+  const wrap = document.createElement("div");
+  wrap.className = "kanban-actions";
+  const transitions = [
+    { key: "candidature", label: "Candidature envoyée" },
+    { key: "entretien", label: "Entretien" },
+    { key: "refuse", label: "Refusé" },
+  ];
+  transitions.forEach((transition) => {
+    if (transition.key === colKey) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "kanban-action";
+    btn.textContent = transition.label;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      updateStageStatus(item.id, findColumnLabelByKey(transition.key));
+    });
+    wrap.appendChild(btn);
+  });
+  return wrap;
+}
+
 function buildSegments(data) {
   const total = data.total || 0;
   const open = data.open || 0;
@@ -49,9 +254,9 @@ function buildSegments(data) {
 
   const list = [
     { key: "open", label: "Ouvert", count: open, color: "#0a84ff" },
-    { key: "applied", label: "Candidatures envoyées", count: applied, color: "#34c759" },
+    { key: "applied", label: "Candidatures envoyÃ©es", count: applied, color: "#34c759" },
     { key: "other", label: "Autres", count: other, color: "#8e8e93" },
-    { key: "recale", label: "Recalé", count: recale, color: "#ff453a" },
+    { key: "recale", label: "RecalÃ©", count: recale, color: "#ff453a" },
   ].filter((s) => s.count > 0);
 
   if (list.length === 0 && total === 0) {
@@ -209,6 +414,7 @@ if (canvas) {
 function renderKanban() {
   if (!kanbanBoardEl) return;
   kanbanBoardEl.innerHTML = "";
+  if (kanbanStatusEl) kanbanStatusEl.textContent = "";
   const groups = KANBAN_COLUMNS.reduce((acc, col) => {
     acc[col.key] = [];
     return acc;
@@ -226,7 +432,13 @@ function renderKanban() {
 
     const header = document.createElement("div");
     header.className = "kanban-header";
-    header.innerHTML = `<span>${col.label}</span><span class="kanban-count">${groups[col.key].length}</span>`;
+    const count = groups[col.key].length;
+    const limit = KANBAN_WIP_LIMITS[col.key] ?? 999;
+    const over = count > limit;
+    header.innerHTML = `<span>${col.label}</span><span class="kanban-count${over ? " over-limit" : ""}">${count}/${limit}</span>`;
+    if (over && kanbanStatusEl) {
+      kanbanStatusEl.textContent = `WIP dépassé: ${col.label} (${count}/${limit}).`;
+    }
     column.appendChild(header);
 
     groups[col.key].forEach((item) => {
@@ -245,6 +457,7 @@ function renderKanban() {
       role.className = "kanban-role";
       role.textContent = normalizeText(item.title && item.company ? item.title : "Stage");
       card.appendChild(role);
+      card.appendChild(makeKanbanQuickActions(item, col.key));
 
       card.addEventListener("dragstart", (e) => {
         card.classList.add("dragging");
@@ -295,6 +508,9 @@ function updateStageStatus(id, status) {
         item.status = status;
         renderKanban();
         applyAllStagesFilter();
+        loadWeeklyKpis();
+        loadStageBlockers();
+        loadStageDataQuality();
       } else {
         // keep local state unchanged
       }
@@ -525,6 +741,9 @@ function loadAllStages() {
 loadStats();
 loadOpenStages();
 loadAllStages();
+loadWeeklyKpis();
+loadStageBlockers();
+loadStageDataQuality();
 
 if (allSearchEl) {
   allSearchEl.addEventListener("input", () => applyAllStagesFilter());

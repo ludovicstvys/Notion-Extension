@@ -296,6 +296,13 @@
             <p class="note">Base dédiée aux tâches (Task, Status, Due date, Notes).</p>
             <p class="note" id="todo-status"></p>
           </div>
+          <div style="margin-top: 12px;">
+            <label class="checkline">
+              <input type="checkbox" id="pipeline-auto-import-enabled" />
+              Pipeline multi-sources auto (LinkedIn / Welcome / JobTeaser)
+            </label>
+            <p class="note" id="pipeline-auto-import-status"></p>
+          </div>
           <div class="actions" style="margin-top: 12px;">
             <button id="save">Enregistrer</button>
             <button id="check" class="secondary">Verifier connexion + charger</button>
@@ -431,6 +438,45 @@
             <button id="gcal-refresh" class="secondary">Rafraichir calendriers</button>
           </div>
           <div style="margin-top: 12px;">
+            <label for="external-ical-url">Calendrier externe (lien iCal)</label>
+            <input
+              id="external-ical-url"
+              placeholder="https://.../agenda/ical/..."
+              autocomplete="off"
+            />
+            <p class="note">Flux iCal en lecture seule (ex: agenda ESSEC).</p>
+          </div>
+          <div class="actions" style="margin-top: 8px;">
+            <button id="external-ical-save" class="secondary">Enregistrer lien iCal</button>
+          </div>
+          <p class="note" id="external-ical-status"></p>
+          <div style="margin-top: 12px;">
+            <label>Rappels calendrier (minutes avant)</label>
+            <div class="grid" style="margin-top: 8px;">
+              <div>
+                <label for="gcal-reminder-default">Par défaut</label>
+                <input id="gcal-reminder-default" placeholder="30" />
+              </div>
+              <div>
+                <label for="gcal-reminder-meeting">Réunion</label>
+                <input id="gcal-reminder-meeting" placeholder="30" />
+              </div>
+              <div>
+                <label for="gcal-reminder-entretien">Entretien</label>
+                <input id="gcal-reminder-entretien" placeholder="120,30" />
+              </div>
+              <div>
+                <label for="gcal-reminder-deadline">Deadline</label>
+                <input id="gcal-reminder-deadline" placeholder="1440,60" />
+              </div>
+            </div>
+            <p class="note">Snooze disponible: 15 min, 1h, demain.</p>
+          </div>
+          <div class="actions" style="margin-top: 8px;">
+            <button id="gcal-reminder-save" class="secondary">Enregistrer rappels</button>
+          </div>
+          <p class="note" id="gcal-reminder-status"></p>
+          <div style="margin-top: 12px;">
             <label>
               <input type="checkbox" id="notion-sync-enabled" />
               Sync Notion → Calendar (auto)
@@ -478,12 +524,12 @@
 
         <section class="card">
           <h3 class="section-title">Import / Export</h3>
-          <p class="note">Sauvegarde tes preferences et restaure-les.</p>
+          <p class="note">Sauvegarde toute la configuration (tokens, cles API, parametres) et restaure-la.</p>
           <div class="actions" style="margin-top: 10px;">
-            <button id="export-config">Exporter</button>
+            <button id="export-config">Exporter en .txt</button>
             <button id="import-config" class="secondary">Importer</button>
           </div>
-          <textarea id="config-data" placeholder="Colle ici le JSON de configuration" style="margin-top:10px; width:100%; min-height:120px;"></textarea>
+          <textarea id="config-data" placeholder="Colle ici le JSON/TXT de configuration" style="margin-top:10px; width:100%; min-height:120px;"></textarea>
           <p class="note" id="config-status"></p>
         </section>
 
