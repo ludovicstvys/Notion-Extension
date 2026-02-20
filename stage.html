@@ -227,6 +227,15 @@
       .quick-btn:hover {
         border-color: rgba(56, 189, 248, 0.45);
       }
+      .quick-btn-danger {
+        color: #ffb4ac;
+        border-color: rgba(255, 69, 58, 0.45);
+        background: rgba(255, 69, 58, 0.14);
+      }
+      .quick-btn-danger:hover {
+        color: #ffd5d1;
+        border-color: rgba(255, 69, 58, 0.8);
+      }
       .stage-row a {
         color: var(--accent);
         text-decoration: none;
@@ -251,8 +260,10 @@
       .stage-open-list {
         display: grid;
         gap: 8px;
-        max-height: 220px;
-        overflow: auto;
+        max-height: 180px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        scrollbar-gutter: stable;
       }
       .stage-open-list.minimized {
         max-height: 72px;
@@ -260,8 +271,33 @@
       .stage-all-list {
         display: grid;
         gap: 8px;
-        max-height: 320px;
-        overflow: auto;
+        max-height: 240px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        scrollbar-gutter: stable;
+      }
+      .stage-open-list,
+      .stage-all-list {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(148, 163, 184, 0.55) rgba(11, 19, 36, 0.55);
+      }
+      .stage-open-list::-webkit-scrollbar,
+      .stage-all-list::-webkit-scrollbar {
+        width: 8px;
+      }
+      .stage-open-list::-webkit-scrollbar-track,
+      .stage-all-list::-webkit-scrollbar-track {
+        background: rgba(11, 19, 36, 0.55);
+        border-radius: 999px;
+      }
+      .stage-open-list::-webkit-scrollbar-thumb,
+      .stage-all-list::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.55);
+        border-radius: 999px;
+      }
+      .stage-open-list::-webkit-scrollbar-thumb:hover,
+      .stage-all-list::-webkit-scrollbar-thumb:hover {
+        background: rgba(148, 163, 184, 0.75);
       }
       .stage-search {
         width: 100%;
@@ -383,7 +419,17 @@
       <a href="yahoo.html">Yahoo</a>
       <a href="search.html">Recherche</a>
     </nav>
-    <a class="settings-btn" href="options.html" aria-label="Options">⚙️</a>
+    <a class="settings-btn" href="options.html" aria-label="Options">&#9881;</a>
+    
+    <section class="card">
+      <div class="stage-open-controls">
+        <h2>Stages ouverts</h2>
+        <button class="stage-open-toggle" id="stage-open-toggle" type="button">Minimiser</button>
+      </div>
+      <p class="note" id="stage-open-status">Chargement...</p>
+      <div class="list stage-open-list" id="stage-open-list"></div>
+    </section>
+
 
     <section class="card">
       <h1>Stages</h1>
@@ -423,15 +469,6 @@
       <h2>Qualité des données</h2>
       <p class="note" id="stage-quality-status">Chargement...</p>
       <div class="list" id="stage-quality-list"></div>
-    </section>
-
-    <section class="card">
-      <div class="stage-open-controls">
-        <h2>Stages ouverts</h2>
-        <button class="stage-open-toggle" id="stage-open-toggle" type="button">Minimiser</button>
-      </div>
-      <p class="note" id="stage-open-status">Chargement...</p>
-      <div class="list stage-open-list" id="stage-open-list"></div>
     </section>
 
     <section class="card">

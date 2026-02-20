@@ -2540,6 +2540,18 @@ async function updateStageStatus(payload) {
   return { ok: true, previousStatus: previousRaw, newStatus: value, statusKind: nextKind };
 }
 
+async function deleteStage(payload) {
+  const { notionToken: token } = await chrome.storage.sync.get(["notionToken"]);
+  if (!token) throw new Error("Config Notion manquante (Options).");
+
+  const pageId = normalizeText(payload?.id || "");
+  if (!pageId) throw new Error("Stage ID manquant.");
+
+  await notionFetch(token, `pages/${pageId}`, "PATCH", { archived: true });
+  await chrome.storage.local.remove([STAGE_STATS_CACHE_KEY]);
+  return { ok: true, id: pageId };
+}
+
 async function checkTodoDb() {
   const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
     "notionToken",
@@ -3016,6 +3028,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       "Notion - stage status",
       {
         syncName: "notionStageStatus",
+        meta: { id: msg?.payload?.id || null },
+      }
+    );
+  }
+
+  if (msg?.type === "DELETE_STAGE") {
+    return respondWith(
+      deleteStage(msg?.payload),
+      sendResponse,
+      "Notion - suppression stage",
+      {
+        syncName: "notionStageDelete",
         meta: { id: msg?.payload?.id || null },
       }
     );

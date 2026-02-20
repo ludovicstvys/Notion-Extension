@@ -543,6 +543,42 @@ function updateStageStatus(id, status) {
   );
 }
 
+function deleteStage(id, label) {
+  const stageId = normalizeText(id || "");
+  if (!stageId) return;
+  const stageLabel = normalizeText(label || "ce stage");
+  const confirmed = window.confirm(`Supprimer ce stage de Notion ?\n${stageLabel}`);
+  if (!confirmed) return;
+
+  if (openStatusEl) openStatusEl.textContent = "Suppression...";
+  chrome.runtime.sendMessage(
+    { type: "DELETE_STAGE", payload: { id: stageId } },
+    (res) => {
+      if (chrome.runtime.lastError) {
+        if (openStatusEl) openStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
+        return;
+      }
+      if (!res?.ok) {
+        const err = res?.error || "suppression impossible";
+        const hint =
+          err === "Message inconnu."
+            ? "Extension pas rechargee. Recharge l'extension puis reessaie."
+            : `Erreur: ${err}`;
+        if (openStatusEl) openStatusEl.textContent = hint;
+        return;
+      }
+      allStages = allStages.filter((stage) => stage.id !== stageId);
+      applyAllStagesFilter();
+      renderKanban();
+      loadOpenStages();
+      loadStats();
+      loadWeeklyKpis();
+      loadStageBlockers();
+      loadStageDataQuality();
+    }
+  );
+}
+
 function renderOpenStages(items) {
   if (!openListEl) return;
   openListEl.innerHTML = "";
@@ -573,6 +609,41 @@ function renderOpenStages(items) {
       badges.appendChild(badge);
     }
     if (badges.childNodes.length > 0) row.appendChild(badges);
+
+    const actions = document.createElement("div");
+    actions.className = "quick-actions";
+
+    if (item.url) {
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.className = "quick-btn";
+      openBtn.textContent = "Ouvrir lien";
+      openBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        window.open(item.url, "_blank", "noreferrer");
+      });
+      openBtn.addEventListener("keydown", (e) => e.stopPropagation());
+      actions.appendChild(openBtn);
+    }
+
+    if (item.id) {
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "quick-btn quick-btn-danger";
+      deleteBtn.textContent = "Supprimer";
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteStage(
+          item.id,
+          normalizeText([item.company, item.title].filter(Boolean).join(" - ")) || "ce stage"
+        );
+      });
+      deleteBtn.addEventListener("keydown", (e) => e.stopPropagation());
+      actions.appendChild(deleteBtn);
+    }
+
+    if (actions.childNodes.length > 0) row.appendChild(actions);
+
     if (item.url) {
       row.addEventListener("click", () => {
         window.open(item.url, "_blank", "noreferrer");
