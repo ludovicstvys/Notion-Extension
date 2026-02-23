@@ -31,8 +31,6 @@ self.EXTENSION_DEFAULTS = {
       entretien: [120, 30],
       deadline: [1440, 60],
     },
-    pipelineAutoImportEnabled: true,
-
     // News + widgets + focus
     yahooNewsPrefs: {
       symbols: ["^GSPC"],

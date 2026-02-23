@@ -40,12 +40,14 @@ const BDF_API_KEY_KEY = "bdfApiKey";
 const GOOGLE_PLACES_KEY_KEY = "googlePlacesApiKey";
 const STAGE_STATS_CACHE_KEY = "stageStatsCache";
 const STAGE_STATS_CACHE_TTL_MS = 5 * 60 * 1000;
-const STAGE_TODO_AUTOMATION_KEY = "stageTodoAutomationMap";
+const STAGE_DASHBOARD_SNAPSHOT_KEY = "stageDashboardSnapshot";
+const STAGE_SCHEMA_CACHE_KEY = "stageSchemaCache";
+const STAGE_DASHBOARD_TTL_MS = 90 * 1000;
+const STAGE_SCHEMA_TTL_MS = 60 * 60 * 1000;
+const STAGE_DATA_SYNC_ALARM = "stage-data-sync";
 const STAGE_SLA_OPEN_DAYS = 7;
 const STAGE_SLA_APPLIED_DAYS = 10;
 const STAGE_SLA_ALARM = "stage-sla-check";
-const PIPELINE_AUTO_IMPORT_KEY = "pipelineAutoImportEnabled";
-const PIPELINE_RECENT_IMPORTS_KEY = "pipelineRecentImports";
 const DIAG_ERRORS_KEY = "diagErrors";
 const DIAG_ERRORS_LIMIT = 25;
 const DIAG_SYNC_KEY = "diagSyncStats";
@@ -53,6 +55,9 @@ const DIAG_LAST_SYNC_KEY = "diagLastSyncAt";
 const URL_BLOCKER_RULES_KEY = "urlBlockerRules";
 const URL_BLOCKER_ENABLED_KEY = "urlBlockerEnabled";
 const URL_BLOCKER_BASE_ID = 9000;
+
+let stageSnapshotInFlight = null;
+let stageSnapshotRefreshTimer = null;
 
 try {
   if (chrome?.sidePanel?.setPanelBehavior) {
@@ -416,10 +421,14 @@ function normalizeStageStatusForAutomation(value) {
   const v = normalizeText(value || "").toLowerCase();
   if (!v) return "ouvert";
   if (v.startsWith("ouv")) return "ouvert";
+  if (v.includes("refus") || v.includes("recal")) return "refuse";
   if (v.includes("candid") || v.includes("postul") || v.includes("envoy")) return "candidature";
   if (v.includes("entre") || v.includes("interview")) return "entretien";
-  if (v.includes("refus") || v.includes("recal")) return "refuse";
   return v;
+}
+
+function isStrictOpenStageStatus(value) {
+  return normalizeText(value || "").toLowerCase() === "ouvert";
 }
 
 function normalizeCompareText(value) {
@@ -700,16 +709,116 @@ function makeEventKey(calendarId, event) {
   return `${calendarId}|${event.id}|${start}`;
 }
 
-async function getAuthToken(interactive) {
+let gcalInteractiveConnectPromise = null;
+
+function isAuthUserCancellationError(message) {
+  const text = String(message || "").toLowerCase();
+  return /user did not approve|user cancelled|user canceled|access_denied|denied|cancelled|canceled|closed by user/.test(
+    text
+  );
+}
+
+async function getAuthTokenRaw(interactive) {
   return new Promise((resolve, reject) => {
-    chrome.identity.getAuthToken({ interactive }, (token) => {
+    chrome.identity.getAuthToken({ interactive: !!interactive }, (token) => {
       if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
+        reject(makeError(chrome.runtime.lastError.message, "AUTH_REQUIRED"));
+        return;
+      }
+      if (!token) {
+        reject(makeError("Aucun token Google recu.", "AUTH_REQUIRED"));
         return;
       }
       resolve(token);
     });
   });
+}
+
+async function clearCachedGoogleTokens(tokenToRemove) {
+  try {
+    if (typeof chrome.identity.clearAllCachedAuthTokens === "function") {
+      await new Promise((resolve) => chrome.identity.clearAllCachedAuthTokens(resolve));
+      return;
+    }
+  } catch (_) {
+    // Fallback below if API is unavailable.
+  }
+  if (tokenToRemove) {
+    try {
+      await new Promise((resolve) =>
+        chrome.identity.removeCachedAuthToken({ token: tokenToRemove }, resolve)
+      );
+    } catch (_) {
+      // Ignore cache cleanup failure.
+    }
+  }
+}
+
+async function getAuthToken(interactive, options = {}) {
+  const wantsInteractive = !!interactive;
+  const requestedAttempts = Number.parseInt(options?.attempts, 10);
+  const maxAttempts =
+    Number.isFinite(requestedAttempts) && requestedAttempts > 0
+      ? requestedAttempts
+      : wantsInteractive
+        ? 2
+        : 1;
+  let lastErr = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await getAuthTokenRaw(wantsInteractive);
+    } catch (err) {
+      lastErr = err;
+      if (!wantsInteractive) break;
+      if (attempt >= maxAttempts) break;
+      if (isAuthUserCancellationError(err?.message)) break;
+      await clearCachedGoogleTokens();
+    }
+  }
+
+  throw lastErr || makeError("Authentification Google requise.", "AUTH_REQUIRED");
+}
+
+async function verifyGoogleToken(token) {
+  const { status } = await safeFetch(
+    `${GCAL_BASE}/users/me/calendarList?maxResults=1`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+    "Google Calendar - verification token",
+    [401, 403]
+  );
+  if (status === 401 || status === 403) {
+    throw makeError("Authentification Google requise.", "AUTH_REQUIRED", status);
+  }
+}
+
+async function connectGoogleInteractive() {
+  if (gcalInteractiveConnectPromise) return gcalInteractiveConnectPromise;
+
+  gcalInteractiveConnectPromise = (async () => {
+    let token = await getAuthToken(true, { attempts: 2 });
+    try {
+      await verifyGoogleToken(token);
+    } catch (err) {
+      const code = err?.code || classifyError(err?.message, err?.status);
+      if (code !== "AUTH_REQUIRED") throw err;
+      await clearCachedGoogleTokens(token);
+      token = await getAuthToken(true, { attempts: 1 });
+      await verifyGoogleToken(token);
+    }
+    return { ok: true };
+  })();
+
+  try {
+    return await gcalInteractiveConnectPromise;
+  } finally {
+    gcalInteractiveConnectPromise = null;
+  }
 }
 
 async function gcalRequest(path, interactive, options = {}) {
@@ -1704,34 +1813,6 @@ function buildProps(data, map, statusMap) {
   return props;
 }
 
-function isOpenStagePayload(payload, statusMap) {
-  if (payload?.applied === true) return false;
-  const rawStatus = normalizeText(payload?.status || "");
-  if (!rawStatus) return true;
-
-  const openLabel = normalizeText(statusMap?.open || "Ouvert").toLowerCase();
-  const status = rawStatus.toLowerCase();
-  if (status === openLabel) return true;
-  return status.startsWith("ouv");
-}
-
-function buildOpenStageTodoPayload(payload) {
-  const company = normalizeText(payload?.company || "");
-  const title = normalizeText(payload?.title || "");
-  const label = [company, title].filter(Boolean).join(" - ") || "Stage";
-  const url = normalizeText(payload?.url || "");
-  const deadline = normalizeText(payload?.deadline || "");
-  const notesParts = [];
-  if (url) notesParts.push(url);
-  if (deadline) notesParts.push(`Deadline: ${deadline}`);
-  return {
-    task: `Postuler: ${label}`,
-    dueDate: isoDatePlusDays(3),
-    status: "Not Started",
-    notes: notesParts.join("\n"),
-  };
-}
-
 async function findDuplicateStageBySmartMatch(token, dbId, payload, map) {
   const url = normalizeText(payload?.url || "");
   const title = normalizeText(payload?.title || "");
@@ -1777,106 +1858,6 @@ async function findDuplicateStageBySmartMatch(token, dbId, payload, map) {
   return best;
 }
 
-function suggestTodoDueDate(deadlineText, fallbackDays) {
-  const today = new Date();
-  today.setHours(12, 0, 0, 0);
-  const fallback = new Date(today);
-  fallback.setDate(fallback.getDate() + fallbackDays);
-  const deadline = parseDateFromAny(deadlineText);
-  if (!deadline) return fallback.toISOString().slice(0, 10);
-
-  const adjusted = new Date(deadline);
-  adjusted.setHours(12, 0, 0, 0);
-  adjusted.setDate(adjusted.getDate() - 1);
-  const chosen = adjusted < fallback ? adjusted : fallback;
-  if (chosen < today) return today.toISOString().slice(0, 10);
-  return chosen.toISOString().slice(0, 10);
-}
-
-function buildStageTodoTemplates(stage, statusKind) {
-  const company = normalizeText(stage?.company || "");
-  const title = normalizeText(stage?.title || "");
-  const label = [company, title].filter(Boolean).join(" - ") || "Stage";
-  const url = normalizeText(stage?.url || "");
-  const deadline = normalizeText(stage?.closeDate || "");
-  const baseNotes = [url, deadline ? `Deadline: ${deadline}` : ""].filter(Boolean).join("\n");
-
-  if (statusKind === "ouvert") {
-    return [
-      {
-        task: `Postuler: ${label}`,
-        dueDate: suggestTodoDueDate(deadline, 3),
-        status: "Not Started",
-        notes: baseNotes,
-      },
-    ];
-  }
-  if (statusKind === "candidature") {
-    return [
-      {
-        task: `Relance candidature: ${label}`,
-        dueDate: suggestTodoDueDate(deadline, 5),
-        status: "Not Started",
-        notes: baseNotes,
-      },
-      {
-        task: `Suivi RH: ${label}`,
-        dueDate: suggestTodoDueDate(deadline, 7),
-        status: "Not Started",
-        notes: baseNotes,
-      },
-    ];
-  }
-  if (statusKind === "entretien") {
-    return [
-      {
-        task: `Prepa entretien: ${label}`,
-        dueDate: suggestTodoDueDate(deadline, 2),
-        status: "Not Started",
-        notes: baseNotes,
-      },
-      {
-        task: `Suivi RH: ${label}`,
-        dueDate: suggestTodoDueDate(deadline, 4),
-        status: "Not Started",
-        notes: baseNotes,
-      },
-    ];
-  }
-  return [];
-}
-
-async function maybeCreateTodosForStageStatus(stage, statusKind) {
-  const templates = buildStageTodoTemplates(stage, statusKind);
-  if (!templates.length) return { created: 0 };
-
-  const key = `${stage?.id || ""}|${statusKind}`;
-  if (!stage?.id) return { created: 0 };
-  const { [STAGE_TODO_AUTOMATION_KEY]: rawMap } = await chrome.storage.local.get([
-    STAGE_TODO_AUTOMATION_KEY,
-  ]);
-  const map = rawMap && typeof rawMap === "object" ? rawMap : {};
-  if (map[key]) return { created: 0 };
-
-  let created = 0;
-  for (const task of templates) {
-    try {
-      await createNotionTodo(task);
-      created += 1;
-    } catch (err) {
-      await handleError(err, "Todo auto - stage statut", {
-        stageId: stage.id || null,
-        statusKind,
-        task: task.task,
-      });
-    }
-  }
-
-  map[key] = Date.now();
-  await chrome.storage.local.set({ [STAGE_TODO_AUTOMATION_KEY]: map });
-  return { created };
-}
-
 async function upsertToNotion(payload) {
   const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
     "notionToken",
@@ -1905,24 +1886,16 @@ async function upsertToNotion(payload) {
 
     if (existing) {
       await notionFetch(token, `pages/${existing.id}`, "PATCH", { properties });
+      await invalidateStageSnapshot();
+      scheduleStageSnapshotRefresh(150);
       return { ok: true, mode: "updated" };
     } else {
       await notionFetch(token, "pages", "POST", {
         parent: { database_id: normalizedDbId },
         properties,
       });
-      if (isOpenStagePayload(payload, statusMap)) {
-        await maybeCreateTodosForStageStatus(
-          {
-            id: `upsert|${normalizeText(payload?.url || payload?.title || String(Date.now()))}`,
-            title: payload?.title || "",
-            company: payload?.company || "",
-            closeDate: payload?.deadline || "",
-            url: payload?.url || "",
-          },
-          "ouvert"
-        );
-      }
+      await invalidateStageSnapshot();
+      scheduleStageSnapshotRefresh(150);
       return { ok: true, mode: "created" };
     }
   } catch (e) {
@@ -2377,6 +2350,8 @@ async function applyStageQualityFix(payload) {
   }
 
   await notionFetch(token, `pages/${pageId}`, "PATCH", { properties });
+  await invalidateStageSnapshot();
+  scheduleStageSnapshotRefresh(150);
   return { ok: true };
 }
 
@@ -2446,6 +2421,8 @@ async function updateStageNotes(payload) {
   };
 
   await notionFetch(token, `pages/${pageId}`, "PATCH", { properties });
+  await invalidateStageSnapshot();
+  scheduleStageSnapshotRefresh(150);
   return { ok: true };
 }
 
@@ -2483,13 +2460,13 @@ async function updateStageStatus(payload) {
   const value =
     statusRaw.toLowerCase().startsWith("ouv")
       ? statusMap.open || "Ouvert"
-      : statusRaw.toLowerCase().includes("candid")
+      : statusRaw.toLowerCase().includes("refus") || statusRaw.toLowerCase().includes("recal")
+        ? statusMap.rejected || "Refus?"
+        : statusRaw.toLowerCase().includes("candid")
         ? statusMap.applied || "Candidature envoyee"
         : statusRaw.toLowerCase().includes("entre")
           ? statusMap.interview || "Entretien"
-          : statusRaw.toLowerCase().includes("refus") || statusRaw.toLowerCase().includes("recal")
-            ? statusMap.rejected || "Refus?"
-            : statusRaw;
+          : statusRaw;
 
   let propPayload = null;
   if (statusProp.type === "status") {
@@ -2503,10 +2480,6 @@ async function updateStageStatus(payload) {
   }
 
   const applicationDateKey = map.applicationDate || "Application Date";
-  const closeDateKey = map.closeDate || "Date de fermeture";
-  const companyKey = map.company || "Entreprise";
-  const jobTitleKey = map.jobTitle || "Job Title";
-  const urlKey = map.url || "lien offre";
 
   // Auto-transition side effect: set application date when candidacy is sent.
   if (normalizeStageStatusForAutomation(value) === "candidature") {
@@ -2523,20 +2496,9 @@ async function updateStageStatus(payload) {
   await notionFetch(token, `pages/${pageId}`, "PATCH", { properties: propPayload });
 
   const nextKind = normalizeStageStatusForAutomation(value);
-  const prevKind = normalizeStageStatusForAutomation(previousRaw);
-  if (nextKind !== prevKind) {
-    await maybeCreateTodosForStageStatus(
-      {
-        id: pageId,
-        title: propText(props[jobTitleKey]) || propText(props["Name"]) || "",
-        company: propText(props[companyKey]) || "",
-        closeDate: propText(props[closeDateKey]) || "",
-        url: propText(props[urlKey]) || "",
-      },
-      nextKind
-    );
-  }
 
+  await invalidateStageSnapshot();
+  scheduleStageSnapshotRefresh(150);
   return { ok: true, previousStatus: previousRaw, newStatus: value, statusKind: nextKind };
 }
 
@@ -2548,7 +2510,8 @@ async function deleteStage(payload) {
   if (!pageId) throw new Error("Stage ID manquant.");
 
   await notionFetch(token, `pages/${pageId}`, "PATCH", { archived: true });
-  await chrome.storage.local.remove([STAGE_STATS_CACHE_KEY]);
+  await invalidateStageSnapshot();
+  scheduleStageSnapshotRefresh(150);
   return { ok: true, id: pageId };
 }
 
@@ -2775,6 +2738,658 @@ async function listStageDeadlines() {
   return { ok: true, items: mapped };
 }
 
+async function getStageConfig() {
+  const { notionToken: token, notionDbId: dbId, notionFieldMap, notionStatusMap } =
+    await chrome.storage.sync.get([
+      "notionToken",
+      "notionDbId",
+      "notionFieldMap",
+      "notionStatusMap",
+    ]);
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  return {
+    token,
+    dbId: normalizedDbId,
+    map: notionFieldMap || {},
+    statusMap: notionStatusMap || {},
+  };
+}
+
+async function isStageConfigReady() {
+  try {
+    const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+      "notionToken",
+      "notionDbId",
+    ]);
+    return !!token && !!normalizeDbId(dbId);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function getStageSchemaCached(config, options = {}) {
+  const force = !!options.force;
+  const stored = await chrome.storage.local.get([STAGE_SCHEMA_CACHE_KEY]);
+  const entry = stored?.[STAGE_SCHEMA_CACHE_KEY];
+  const fresh =
+    entry?.at &&
+    entry?.dbId === config.dbId &&
+    Date.now() - entry.at < STAGE_SCHEMA_TTL_MS &&
+    entry?.schema;
+  if (!force && fresh) {
+    return { schema: entry.schema, cached: true };
+  }
+  const schema = await notionFetch(config.token, `databases/${config.dbId}`, "GET");
+  await chrome.storage.local.set({
+    [STAGE_SCHEMA_CACHE_KEY]: {
+      at: Date.now(),
+      dbId: config.dbId,
+      schema,
+    },
+  });
+  return { schema, cached: false };
+}
+
+async function fetchStageRows(config) {
+  return listDbRows(config.token, config.dbId, null);
+}
+
+function mapStageRow(row, map) {
+  const p = row?.properties || {};
+  const jobTitleKey = map.jobTitle || "Job Title";
+  const companyKey = map.company || "Entreprise";
+  const locationKey = map.location || "Lieu";
+  const urlKey = map.url || "lien offre";
+  const statusKey = map.status || "Status";
+  const roleKey = map.role || "Role";
+  const typeKey = map.type || "Type d'infrastructure";
+  const applicationDateKey = map.applicationDate || "Application Date";
+  const startMonthKey = map.startMonth || "Start month";
+  const openDateKey = map.openDate || "Date d'ouverture";
+  const closeDateKey = map.closeDate || "Date de fermeture";
+  const notesKey = map.notes || "Notes";
+
+  return {
+    id: row?.id || "",
+    title: propText(p[jobTitleKey]) || propText(p["Name"]) || "",
+    company: propText(p[companyKey]) || "",
+    location: propText(p[locationKey]) || "",
+    url: propText(p[urlKey]) || "",
+    status: propText(p[statusKey]) || "",
+    role: propText(p[roleKey]) || "",
+    type: propText(p[typeKey]) || "",
+    applicationDate: propText(p[applicationDateKey]) || "",
+    startMonth: propText(p[startMonthKey]) || "",
+    openDate: propText(p[openDateKey]) || "",
+    closeDate: propText(p[closeDateKey]) || "",
+    notes: propText(p[notesKey]) || "",
+    createdTime: row?.created_time || "",
+    lastEditedTime: row?.last_edited_time || row?.created_time || "",
+  };
+}
+
+function buildStageStatsFromItems(items) {
+  const counts = new Map();
+  items.forEach((item) => {
+    const raw = normalizeText(item?.status || "Non renseigne") || "Non renseigne";
+    counts.set(raw, (counts.get(raw) || 0) + 1);
+  });
+
+  let openCount = 0;
+  let appliedCount = 0;
+  let recaleCount = 0;
+  const otherBreakdown = [];
+
+  counts.forEach((count, status) => {
+    const norm = normalizeStatus(status);
+    if (norm === "ouvert") {
+      openCount += count;
+      return;
+    }
+    if (isAppliedStatus(norm)) {
+      appliedCount += count;
+      return;
+    }
+    if (norm === "recal?" || norm === "recale") {
+      recaleCount += count;
+      return;
+    }
+    otherBreakdown.push({ status, count });
+  });
+
+  otherBreakdown.sort((a, b) => b.count - a.count);
+  const total = items.length;
+  const otherCount = Math.max(0, total - openCount - appliedCount - recaleCount);
+  return {
+    ok: true,
+    total,
+    open: openCount,
+    applied: appliedCount,
+    recale: recaleCount,
+    other: otherCount,
+    otherBreakdown,
+    capped: false,
+  };
+}
+
+function buildStageWeeklyKpisFromItems(items) {
+  let addedWeek = 0;
+  let sentWeek = 0;
+  const counts = new Map();
+
+  items.forEach((item) => {
+    if (isDateInCurrentWeek(item.createdTime)) {
+      addedWeek += 1;
+    }
+    if (isDateInCurrentWeek(item.applicationDate || "")) {
+      sentWeek += 1;
+    }
+    const status = item.status || "Non renseigne";
+    counts.set(status, (counts.get(status) || 0) + 1);
+  });
+
+  const total = items.length || 1;
+  const progressByStatus = Array.from(counts.entries())
+    .map(([status, count]) => ({
+      status,
+      count,
+      ratio: Math.round((count / total) * 100),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    ok: true,
+    weekStart: startOfWeek(new Date()).toISOString().slice(0, 10),
+    total: items.length,
+    addedWeek,
+    sentWeek,
+    progressByStatus,
+  };
+}
+
+function buildStageBlockersFromItems(items) {
+  const blockers = [];
+  const now = Date.now();
+  items.forEach((item) => {
+    const status = item.status || "";
+    const kind = normalizeStageStatusForAutomation(status);
+    const lastEdited = new Date(item.lastEditedTime || item.createdTime || 0).getTime();
+    if (!Number.isFinite(lastEdited) || lastEdited <= 0) return;
+    const days = Math.floor((now - lastEdited) / (1000 * 60 * 60 * 24));
+    const overOpen = kind === "ouvert" && days > STAGE_SLA_OPEN_DAYS;
+    const overApplied = kind === "candidature" && days > STAGE_SLA_APPLIED_DAYS;
+    if (!overOpen && !overApplied) return;
+    blockers.push({
+      id: item.id || "",
+      title: item.title || "",
+      company: item.company || "",
+      url: item.url || "",
+      status,
+      stagnantDays: days,
+      reason: overOpen
+        ? `Ouvert > ${STAGE_SLA_OPEN_DAYS} jours`
+        : `Candidature > ${STAGE_SLA_APPLIED_DAYS} jours`,
+      suggestedNextStatus: overOpen ? "Candidature" : "Entretien",
+    });
+  });
+  blockers.sort((a, b) => b.stagnantDays - a.stagnantDays);
+  return blockers;
+}
+
+function buildStageQualityIssuesFromItems(items) {
+  const issues = [];
+  items.forEach((item) => {
+    const stageTitle = item.title || "";
+    const company = item.company || "";
+    const url = item.url || "";
+    const closeDate = item.closeDate || "";
+    const notes = item.notes || "";
+
+    if (!company) {
+      issues.push({
+        id: item.id || "",
+        field: "company",
+        title: stageTitle,
+        currentValue: "",
+        suggestedValue: inferCompanyFromUrl(url),
+      });
+    }
+    if (!url) {
+      const maybeUrl = String(stageTitle).match(/https?:\/\/\S+/)?.[0] || "";
+      issues.push({
+        id: item.id || "",
+        field: "url",
+        title: stageTitle,
+        currentValue: "",
+        suggestedValue: maybeUrl,
+      });
+    }
+    if (!closeDate) {
+      issues.push({
+        id: item.id || "",
+        field: "deadline",
+        title: stageTitle,
+        currentValue: "",
+        suggestedValue: suggestDeadlineFromStageData(stageTitle, url, notes),
+      });
+    }
+  });
+  return issues;
+}
+
+function buildStageDeadlinesFromItems(items) {
+  const now = new Date();
+  const horizon = new Date();
+  horizon.setDate(horizon.getDate() + 14);
+  return items
+    .filter((item) => {
+      const closeDate = normalizeText(item.closeDate || "");
+      if (!closeDate) return false;
+      const d = parseDateFromAny(closeDate);
+      if (!d) return false;
+      return d >= now && d <= horizon;
+    })
+    .map((item) => ({
+      id: item.id || "",
+      title: item.title || "",
+      company: item.company || "",
+      url: item.url || "",
+      status: item.status || "",
+      closeDate: item.closeDate || "",
+    }))
+    .sort((a, b) => new Date(a.closeDate) - new Date(b.closeDate));
+}
+
+function isTodoStageStatus(value) {
+  const norm = normalizeText(value || "").toLowerCase();
+  return norm === "oa to do" || norm === "hv to do";
+}
+
+function buildStageTodoFromItems(items) {
+  return items
+    .filter((item) => isTodoStageStatus(item.status))
+    .map((item) => ({
+      id: item.id || "",
+      title: item.title || "",
+      company: item.company || "",
+      url: item.url || "",
+      status: item.status || "",
+    }));
+}
+
+function normalizeStageSnapshot(raw, overrides = {}) {
+  const base = raw && typeof raw === "object" ? raw : {};
+  const allStages = Array.isArray(base.allStages) ? base.allStages : [];
+  const strictOpenStages = allStages.filter((item) => isStrictOpenStageStatus(item?.status));
+  const stats = base.stats && typeof base.stats === "object" ? base.stats : buildStageStatsFromItems(allStages);
+  const weeklyKpis =
+    base.weeklyKpis && typeof base.weeklyKpis === "object"
+      ? base.weeklyKpis
+      : buildStageWeeklyKpisFromItems(allStages);
+  const normalized = {
+    version: Number.isFinite(base.version) ? base.version : 1,
+    generatedAt: Number.isFinite(base.generatedAt) ? base.generatedAt : Date.now(),
+    source: base.source || "cache",
+    stale: !!base.stale,
+    total: Number.isFinite(base.total) ? base.total : allStages.length,
+    allStages,
+    openStages: strictOpenStages,
+    todoStages: Array.isArray(base.todoStages) ? base.todoStages : buildStageTodoFromItems(allStages),
+    stats,
+    weeklyKpis,
+    blockers: Array.isArray(base.blockers) ? base.blockers : buildStageBlockersFromItems(allStages),
+    quality: Array.isArray(base.quality) ? base.quality : buildStageQualityIssuesFromItems(allStages),
+    deadlines: Array.isArray(base.deadlines) ? base.deadlines : buildStageDeadlinesFromItems(allStages),
+    instrumentation: base.instrumentation || null,
+    capped: false,
+  };
+  return { ...normalized, ...overrides };
+}
+
+function buildStageDashboardSnapshot(rows, map, meta = {}) {
+  const allStages = rows.map((row) => mapStageRow(row, map));
+  const openStages = allStages.filter((item) => isStrictOpenStageStatus(item.status));
+  const stats = buildStageStatsFromItems(allStages);
+  const weeklyKpis = buildStageWeeklyKpisFromItems(allStages);
+  const blockers = buildStageBlockersFromItems(allStages);
+  const quality = buildStageQualityIssuesFromItems(allStages);
+  const deadlines = buildStageDeadlinesFromItems(allStages);
+  const todoStages = buildStageTodoFromItems(allStages);
+  return normalizeStageSnapshot(
+    {
+      version: 1,
+      generatedAt: Date.now(),
+      source: "network",
+      stale: false,
+      total: allStages.length,
+      allStages,
+      openStages,
+      todoStages,
+      stats,
+      weeklyKpis,
+      blockers,
+      quality,
+      deadlines,
+      instrumentation: {
+        stageRowsCount: allStages.length,
+        stageSnapshotFetchMs: meta.fetchMs || 0,
+        stageSnapshotBuildMs: meta.buildMs || 0,
+        source: "network",
+        schemaFromCache: !!meta.schemaFromCache,
+      },
+    },
+    { source: "network", stale: false }
+  );
+}
+
+async function readStageSnapshot() {
+  const stored = await chrome.storage.local.get([STAGE_DASHBOARD_SNAPSHOT_KEY]);
+  const raw = stored?.[STAGE_DASHBOARD_SNAPSHOT_KEY];
+  if (!raw || typeof raw !== "object") return null;
+  return normalizeStageSnapshot(raw);
+}
+
+async function writeStageSnapshot(snapshot) {
+  const normalized = normalizeStageSnapshot(snapshot, { source: "network", stale: false });
+  await chrome.storage.local.set({
+    [STAGE_DASHBOARD_SNAPSHOT_KEY]: normalized,
+    [STAGE_STATS_CACHE_KEY]: { at: normalized.generatedAt, data: normalized.stats },
+  });
+  return normalized;
+}
+
+function isStageSnapshotFresh(snapshot) {
+  if (!snapshot?.generatedAt) return false;
+  return Date.now() - snapshot.generatedAt < STAGE_DASHBOARD_TTL_MS;
+}
+
+async function refreshStageSnapshot(options = {}) {
+  const force = !!options.force;
+  const allowStaleOnError = options.allowStaleOnError !== false;
+  if (stageSnapshotInFlight && !force) {
+    return stageSnapshotInFlight;
+  }
+  stageSnapshotInFlight = (async () => {
+    const config = await getStageConfig();
+    const fetchStart = Date.now();
+    const schemaInfo = await getStageSchemaCached(config, { force: false });
+    const rows = await fetchStageRows(config);
+    const fetchMs = Date.now() - fetchStart;
+    const buildStart = Date.now();
+    const snapshot = buildStageDashboardSnapshot(rows, config.map, {
+      fetchMs,
+      buildMs: 0,
+      schemaFromCache: schemaInfo.cached,
+    });
+    snapshot.instrumentation.stageSnapshotBuildMs = Date.now() - buildStart;
+    await writeStageSnapshot(snapshot);
+    await recordDiagnosticSync("stageSnapshot", "ok", {
+      stageRowsCount: rows.length,
+      stageSnapshotFetchMs: snapshot.instrumentation.stageSnapshotFetchMs,
+      stageSnapshotBuildMs: snapshot.instrumentation.stageSnapshotBuildMs,
+      source: "network",
+    });
+    return snapshot;
+  })()
+    .catch(async (err) => {
+      if (allowStaleOnError) {
+        const fallback = await readStageSnapshot();
+        if (fallback) {
+          return normalizeStageSnapshot(fallback, {
+            source: "cache",
+            stale: true,
+          });
+        }
+      }
+      throw err;
+    })
+    .finally(() => {
+      stageSnapshotInFlight = null;
+    });
+  return stageSnapshotInFlight;
+}
+
+async function getStageSnapshot(options = {}) {
+  const force = !!options.force;
+  const allowStale = options.allowStale !== false;
+  if (force) {
+    return refreshStageSnapshot({ force: true, allowStaleOnError: allowStale });
+  }
+  const cached = await readStageSnapshot();
+  if (cached && isStageSnapshotFresh(cached)) {
+    return normalizeStageSnapshot(cached, {
+      source: "cache",
+      stale: false,
+    });
+  }
+  if (cached && allowStale) {
+    refreshStageSnapshot({ allowStaleOnError: true }).catch(() => {});
+    return normalizeStageSnapshot(cached, {
+      source: "cache",
+      stale: true,
+    });
+  }
+  return refreshStageSnapshot({ allowStaleOnError: allowStale });
+}
+
+async function invalidateStageSnapshot() {
+  await chrome.storage.local.remove([STAGE_DASHBOARD_SNAPSHOT_KEY, STAGE_STATS_CACHE_KEY]);
+}
+
+function scheduleStageSnapshotRefresh(delayMs = 1000) {
+  const delay = Math.max(0, Number(delayMs) || 0);
+  if (stageSnapshotRefreshTimer) {
+    clearTimeout(stageSnapshotRefreshTimer);
+  }
+  stageSnapshotRefreshTimer = setTimeout(() => {
+    stageSnapshotRefreshTimer = null;
+    refreshStageSnapshot({ allowStaleOnError: true }).catch(() => {});
+  }, delay);
+}
+
+async function getStageDashboard(payload) {
+  const snapshot = await getStageSnapshot({
+    force: !!payload?.force,
+    allowStale: payload?.allowStale !== false,
+  });
+  return { ok: true, snapshot };
+}
+
+async function refreshStageDashboard() {
+  const snapshot = await refreshStageSnapshot({
+    force: true,
+    allowStaleOnError: true,
+  });
+  return { ok: true, snapshot };
+}
+
+async function listOpenStagesFast() {
+  const snapshot = await getStageSnapshot({ allowStale: true });
+  const items = Array.isArray(snapshot.openStages) ? snapshot.openStages : [];
+  return {
+    ok: true,
+    items,
+    total: items.length,
+    capped: false,
+    cached: snapshot.source === "cache",
+    stale: !!snapshot.stale,
+  };
+}
+
+async function listTodoStagesFast() {
+  const snapshot = await getStageSnapshot({ allowStale: true });
+  const items = Array.isArray(snapshot.todoStages)
+    ? snapshot.todoStages
+    : buildStageTodoFromItems(snapshot.allStages || []);
+  return {
+    ok: true,
+    items,
+    total: items.length,
+    capped: false,
+    cached: snapshot.source === "cache",
+    stale: !!snapshot.stale,
+  };
+}
+
+async function listAllStagesFast() {
+  const snapshot = await getStageSnapshot({ allowStale: true });
+  const items = Array.isArray(snapshot.allStages) ? snapshot.allStages : [];
+  return {
+    ok: true,
+    items,
+    total: items.length,
+    capped: false,
+    cached: snapshot.source === "cache",
+    stale: !!snapshot.stale,
+  };
+}
+
+async function getStageStatusStatsFast() {
+  const snapshot = await getStageSnapshot({ allowStale: true });
+  const stats = snapshot.stats || buildStageStatsFromItems(snapshot.allStages || []);
+  return {
+    ...stats,
+    cached: snapshot.source === "cache",
+    stale: !!snapshot.stale,
+  };
+}
+
+async function getStageWeeklyKpisFast() {
+  const snapshot = await getStageSnapshot({ allowStale: true });
+  const weekly = snapshot.weeklyKpis || buildStageWeeklyKpisFromItems(snapshot.allStages || []);
+  return {
+    ...weekly,
+    cached: snapshot.source === "cache",
+    stale: !!snapshot.stale,
+  };
+}
+
+async function getStageBlockersFast() {
+  const snapshot = await getStageSnapshot({ allowStale: true });
+  const items = Array.isArray(snapshot.blockers)
+    ? snapshot.blockers
+    : buildStageBlockersFromItems(snapshot.allStages || []);
+  return {
+    ok: true,
+    items,
+    total: items.length,
+    cached: snapshot.source === "cache",
+    stale: !!snapshot.stale,
+  };
+}
+
+async function getStageDataQualityFast() {
+  const snapshot = await getStageSnapshot({ allowStale: true });
+  const items = Array.isArray(snapshot.quality)
+    ? snapshot.quality
+    : buildStageQualityIssuesFromItems(snapshot.allStages || []);
+  return {
+    ok: true,
+    items,
+    total: items.length,
+    cached: snapshot.source === "cache",
+    stale: !!snapshot.stale,
+  };
+}
+
+async function listStageDeadlinesFast() {
+  const snapshot = await getStageSnapshot({ allowStale: true });
+  const items = Array.isArray(snapshot.deadlines)
+    ? snapshot.deadlines
+    : buildStageDeadlinesFromItems(snapshot.allStages || []);
+  return {
+    ok: true,
+    items,
+    cached: snapshot.source === "cache",
+    stale: !!snapshot.stale,
+  };
+}
+
+function findDbPropKeyByName(props, names) {
+  const list = (names || []).map((n) => String(n || "").toLowerCase());
+  return Object.keys(props || {}).find((key) => list.includes(key.toLowerCase())) || "";
+}
+
+function findDbPropKeyByType(props, types) {
+  return Object.keys(props || {}).find((key) => (types || []).includes(props[key]?.type)) || "";
+}
+
+function resolveTodoDbKeys(props) {
+  return {
+    statusKey: findDbPropKeyByName(props, ["Status"]) || findDbPropKeyByType(props, ["status", "select"]),
+    taskKey: findDbPropKeyByName(props, ["Task", "Name"]) || findDbPropKeyByType(props, ["title"]),
+    dueKey:
+      findDbPropKeyByName(props, ["Due date", "Due Date", "Deadline", "Date"]) ||
+      findDbPropKeyByType(props, ["date"]),
+    notesKey:
+      findDbPropKeyByName(props, ["Notes", "Note"]) || findDbPropKeyByType(props, ["rich_text"]),
+  };
+}
+
+function statusPropOptions(statusProp) {
+  if (!statusProp || typeof statusProp !== "object") return [];
+  if (statusProp.type === "status") return statusProp.status?.options || [];
+  if (statusProp.type === "select") return statusProp.select?.options || [];
+  return [];
+}
+
+function resolveTodoStatusName(statusProp, preferred, fallbacks = []) {
+  const options = statusPropOptions(statusProp);
+  const preferredText = normalizeText(preferred || "");
+  if (!options.length) return preferredText || "Not Started";
+
+  const byNorm = new Map();
+  options.forEach((opt) => {
+    const name = normalizeText(opt?.name || "");
+    if (!name) return;
+    byNorm.set(name.toLowerCase(), name);
+  });
+
+  const candidates = [preferredText, ...(fallbacks || [])]
+    .map((v) => normalizeText(v).toLowerCase())
+    .filter(Boolean);
+
+  for (const c of candidates) {
+    if (byNorm.has(c)) return byNorm.get(c);
+  }
+
+  return normalizeText(options[0]?.name || preferredText || "Not Started") || "Not Started";
+}
+
+function resolveTodoDoneName(statusProp, fallback = "Done") {
+  return resolveTodoStatusName(statusProp, fallback, [
+    "Done",
+    "Termine",
+    "Terminee",
+    "Terminé",
+    "Terminée",
+    "Complete",
+    "Completed",
+    "Fait",
+  ]);
+}
+
+function buildTodoStatusProperty(statusProp, statusValue) {
+  const value = normalizeText(statusValue || "");
+  if (!value) throw new Error("Status todo vide.");
+  if (statusProp?.type === "status") {
+    return { status: { name: value } };
+  }
+  if (statusProp?.type === "select") {
+    return { select: { name: value } };
+  }
+  if (statusProp?.type === "rich_text" || statusProp?.type === "title") {
+    return { rich_text: [{ text: { content: value } }] };
+  }
+  throw new Error("Type de colonne Status non supporte dans la base Todo.");
+}
+
 async function listNotionTodos() {
   const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
     "notionToken",
@@ -2789,30 +3404,17 @@ async function listNotionTodos() {
 
   const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
   const props = db.properties || {};
-  const findKeyByName = (names) => {
-    const list = names.map((n) => n.toLowerCase());
-    return Object.keys(props).find((key) => list.includes(key.toLowerCase())) || "";
-  };
-  const findKeyByType = (types) => {
-    return (
-      Object.keys(props).find((key) => types.includes(props[key]?.type)) || ""
-    );
-  };
-
-  const statusKey = findKeyByName(["Status"]) || findKeyByType(["status", "select"]);
-  const taskKey = findKeyByName(["Task", "Name"]) || findKeyByType(["title"]);
-  const dueKey =
-    findKeyByName(["Due date", "Due Date", "Deadline", "Date"]) || findKeyByType(["date"]);
-  const notesKey = findKeyByName(["Notes", "Note"]) || findKeyByType(["rich_text"]);
+  const { statusKey, taskKey, dueKey, notesKey } = resolveTodoDbKeys(props);
 
   const statusProp = props?.[statusKey];
   if (!statusProp) throw new Error("Colonne Status introuvable dans la base Todo.");
+  const doneLabel = resolveTodoDoneName(statusProp, "Done");
 
   let filter = null;
   if (statusProp.type === "status") {
-    filter = { property: statusKey, status: { does_not_equal: "Done" } };
+    filter = { property: statusKey, status: { does_not_equal: doneLabel } };
   } else if (statusProp.type === "select") {
-    filter = { property: statusKey, select: { does_not_equal: "Done" } };
+    filter = { property: statusKey, select: { does_not_equal: doneLabel } };
   } else {
     throw new Error("Type de colonne Status non supporte.");
   }
@@ -2849,12 +3451,57 @@ async function createNotionTodo(payload) {
   const dueDate = normalizeText(payload?.dueDate || "");
   const notes = normalizeText(payload?.notes || "");
 
-  const properties = {
-    Task: { title: [{ text: { content: task } }] },
-    Status: { select: { name: status } },
-  };
-  if (dueDate) properties["Due date"] = { date: { start: dueDate } };
-  if (notes) properties["Notes"] = { rich_text: [{ text: { content: notes } }] };
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const props = db.properties || {};
+  const { statusKey, taskKey, dueKey, notesKey } = resolveTodoDbKeys(props);
+  const statusProp = props?.[statusKey];
+  const taskProp = props?.[taskKey];
+  const dueProp = props?.[dueKey];
+  const notesProp = props?.[notesKey];
+
+  const properties = {};
+  if (taskProp?.type === "title") {
+    properties[taskKey] = { title: [{ text: { content: task } }] };
+  } else if (taskProp?.type === "rich_text") {
+    properties[taskKey] = { rich_text: [{ text: { content: task } }] };
+  } else if (taskKey) {
+    properties[taskKey] = { title: [{ text: { content: task } }] };
+  } else {
+    properties.Task = { title: [{ text: { content: task } }] };
+  }
+
+  if (!statusProp || !statusKey) {
+    throw new Error("Colonne Status introuvable dans la base Todo.");
+  }
+  const statusName = resolveTodoStatusName(statusProp, status, [
+    "Not Started",
+    "Not started",
+    "To do",
+    "Todo",
+    "A faire",
+  ]);
+  properties[statusKey] = buildTodoStatusProperty(statusProp, statusName);
+
+  if (dueDate) {
+    if (dueProp?.type === "date" && dueKey) {
+      properties[dueKey] = { date: { start: dueDate } };
+    } else if (dueKey) {
+      properties[dueKey] = { rich_text: [{ text: { content: dueDate } }] };
+    } else {
+      properties["Due date"] = { date: { start: dueDate } };
+    }
+  }
+  if (notes) {
+    if (notesProp?.type === "rich_text" && notesKey) {
+      properties[notesKey] = { rich_text: [{ text: { content: notes } }] };
+    } else if (notesProp?.type === "title" && notesKey) {
+      properties[notesKey] = { title: [{ text: { content: notes } }] };
+    } else if (notesKey) {
+      properties[notesKey] = { rich_text: [{ text: { content: notes } }] };
+    } else {
+      properties.Notes = { rich_text: [{ text: { content: notes } }] };
+    }
+  }
 
   await notionFetch(token, `pages`, "POST", {
     parent: { database_id: normalizedDbId },
@@ -2864,14 +3511,33 @@ async function createNotionTodo(payload) {
 }
 
 async function updateNotionTodoStatus(payload) {
-  const { notionToken: token } = await chrome.storage.sync.get(["notionToken"]);
-  if (!token) throw new Error("Config Notion manquante (Options).");
+  const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionTodoDbId",
+  ]);
+  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
   const pageId = payload?.id;
   if (!pageId) throw new Error("Todo ID manquant.");
 
-  const status = normalizeText(payload?.status || "Done");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid Todo database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const props = db.properties || {};
+  const { statusKey } = resolveTodoDbKeys(props);
+  const statusProp = props?.[statusKey];
+  if (!statusProp || !statusKey) {
+    throw new Error("Colonne Status introuvable dans la base Todo.");
+  }
+
+  const requestedStatus = normalizeText(payload?.status || "");
+  const statusName = requestedStatus
+    ? resolveTodoStatusName(statusProp, requestedStatus)
+    : resolveTodoDoneName(statusProp, "Done");
   const properties = {
-    Status: { select: { name: status } },
+    [statusKey]: buildTodoStatusProperty(statusProp, statusName),
   };
 
   await notionFetch(token, `pages/${pageId}`, "PATCH", { properties });
@@ -2986,8 +3652,40 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
   }
 
+  if (msg?.type === "GET_STAGE_DASHBOARD") {
+    return respondWith(
+      getStageDashboard(msg?.payload),
+      sendResponse,
+      "Notion - dashboard stages",
+      {
+        syncName: "notionStageDashboard",
+        successDetails: (r) => ({
+          total: r?.snapshot?.total ?? null,
+          stale: !!r?.snapshot?.stale,
+          source: r?.snapshot?.source || null,
+        }),
+      }
+    );
+  }
+
+  if (msg?.type === "REFRESH_STAGE_DASHBOARD") {
+    return respondWith(
+      refreshStageDashboard(),
+      sendResponse,
+      "Notion - refresh dashboard stages",
+      {
+        syncName: "notionStageDashboard",
+        successDetails: (r) => ({
+          total: r?.snapshot?.total ?? null,
+          stale: !!r?.snapshot?.stale,
+          source: r?.snapshot?.source || null,
+        }),
+      }
+    );
+  }
+
   if (msg?.type === "GET_OPEN_STAGES") {
-    return respondWith(listOpenStages(), sendResponse, "Notion - stages ouverts", {
+    return respondWith(listOpenStagesFast(), sendResponse, "Notion - stages ouverts", {
       syncName: "notionOpenStages",
       successDetails: (r) => ({
         total: r?.total ?? null,
@@ -2997,7 +3695,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "GET_ALL_STAGES") {
-    return respondWith(listAllStages(), sendResponse, "Notion - tous les stages", {
+    return respondWith(listAllStagesFast(), sendResponse, "Notion - tous les stages", {
       syncName: "notionAllStages",
     });
   }
@@ -3085,7 +3783,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "GET_TODO_STAGES") {
-    return respondWith(listTodoStages(), sendResponse, "Notion - stages a faire", {
+    return respondWith(listTodoStagesFast(), sendResponse, "Notion - stages a faire", {
       syncName: "notionTodoStages",
       successDetails: (r) => ({
         total: r?.total ?? null,
@@ -3095,7 +3793,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "GET_STAGE_STATUS_STATS") {
-    return respondWith(getStageStatusStats(), sendResponse, "Notion - stats stages", {
+    return respondWith(getStageStatusStatsFast(), sendResponse, "Notion - stats stages", {
       syncName: "notionStageStats",
       successDetails: (r) => ({
         total: r?.total ?? null,
@@ -3105,25 +3803,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "GET_STAGE_WEEKLY_KPIS") {
-    return respondWith(getStageWeeklyKpis(), sendResponse, "Notion - KPI hebdo stages", {
+    return respondWith(getStageWeeklyKpisFast(), sendResponse, "Notion - KPI hebdo stages", {
       syncName: "notionStageKpis",
     });
   }
 
   if (msg?.type === "GET_STAGE_DEADLINES") {
-    return respondWith(listStageDeadlines(), sendResponse, "Notion - deadlines stages", {
+    return respondWith(listStageDeadlinesFast(), sendResponse, "Notion - deadlines stages", {
       syncName: "notionStageDeadlines",
     });
   }
 
   if (msg?.type === "GET_STAGE_BLOCKERS") {
-    return respondWith(getStageBlockers(), sendResponse, "Notion - SLA blocages stages", {
+    return respondWith(getStageBlockersFast(), sendResponse, "Notion - SLA blocages stages", {
       syncName: "notionStageBlockers",
     });
   }
 
   if (msg?.type === "GET_STAGE_DATA_QUALITY") {
-    return respondWith(getStageDataQuality(), sendResponse, "Notion - qualite donnees stages", {
+    return respondWith(getStageDataQualityFast(), sendResponse, "Notion - qualite donnees stages", {
       syncName: "notionStageQuality",
     });
   }
@@ -3206,7 +3904,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg?.type === "GCAL_CONNECT") {
     return respondWith(
-      getAuthToken(true).then(() => ({ ok: true })),
+      connectGoogleInteractive(),
       sendResponse,
       "Google Calendar - connexion",
       {
@@ -3570,7 +4268,7 @@ function createGcalNotification(notificationId, data) {
 }
 
 async function notifySlaBlockers() {
-  const res = await getStageBlockers();
+  const res = await getStageBlockersFast();
   if (!res?.ok) return;
   const items = Array.isArray(res.items) ? res.items : [];
   if (!items.length) return;
@@ -3629,6 +4327,18 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!alarm?.name) return;
   if (alarm.name === STAGE_SLA_ALARM) {
     notifySlaBlockers().catch(() => {});
+    return;
+  }
+  if (alarm.name === STAGE_DATA_SYNC_ALARM) {
+    const ready = await isStageConfigReady();
+    if (!ready) return;
+    try {
+      await refreshStageSnapshot({ allowStaleOnError: true });
+    } catch (err) {
+      await handleError(err, "Alarme Sync Stage Snapshot", null, {
+        syncName: "stageSnapshot",
+      });
+    }
     return;
   }
   if (alarm.name.startsWith(GCAL_SNOOZE_ALARM_PREFIX)) {
@@ -3761,8 +4471,10 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
+  chrome.alarms.create(STAGE_DATA_SYNC_ALARM, { periodInMinutes: 2 });
   chrome.alarms.create(STAGE_SLA_ALARM, { periodInMinutes: 720 });
   flushOfflineQueue();
+  scheduleStageSnapshotRefresh(3000);
   ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
 });
 
@@ -3832,8 +4544,10 @@ chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
+  chrome.alarms.create(STAGE_DATA_SYNC_ALARM, { periodInMinutes: 2 });
   chrome.alarms.create(STAGE_SLA_ALARM, { periodInMinutes: 720 });
   flushOfflineQueue();
+  scheduleStageSnapshotRefresh(3000);
   ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
 });
 
@@ -3843,167 +4557,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
     applyUrlBlockerRules().then(checkAllTabsForBlocker);
   }
 });
-
-function isPipelineSourceUrl(url) {
-  const lower = String(url || "").toLowerCase();
-  return (
-    lower.includes("linkedin.com/jobs") ||
-    lower.includes("welcometothejungle.com") ||
-    lower.includes("jobteaser.com")
-  );
-}
-
-function buildPipelineFingerprint(payload) {
-  const url = normalizeCompareText(payload?.url || "");
-  const title = normalizeCompareText(payload?.title || "");
-  const company = normalizeCompareText(payload?.company || "");
-  return url || `${title}|${company}`;
-}
-
-async function shouldSkipRecentPipelineImport(fingerprint) {
-  if (!fingerprint) return true;
-  const { [PIPELINE_RECENT_IMPORTS_KEY]: raw } = await chrome.storage.local.get([
-    PIPELINE_RECENT_IMPORTS_KEY,
-  ]);
-  const map = raw && typeof raw === "object" ? raw : {};
-  const now = Date.now();
-  const recentAt = map[fingerprint] || 0;
-  if (now - recentAt < 6 * 60 * 60 * 1000) return true;
-  map[fingerprint] = now;
-  const entries = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 500);
-  const trimmed = Object.fromEntries(entries);
-  await chrome.storage.local.set({ [PIPELINE_RECENT_IMPORTS_KEY]: trimmed });
-  return false;
-}
-
-async function autoImportFromTab(tabId, url) {
-  if (!isPipelineSourceUrl(url)) return;
-  const { [PIPELINE_AUTO_IMPORT_KEY]: enabled } = await chrome.storage.local.get([
-    PIPELINE_AUTO_IMPORT_KEY,
-  ]);
-  if (enabled === false) return;
-
-  const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => {
-      const normalize = (v) => (v ?? "").toString().trim();
-      const host = location.hostname.toLowerCase();
-      const toText = (el) => normalize(el?.textContent || "");
-      const fromSelectors = (selectors) =>
-        selectors
-          .map((s) => toText(document.querySelector(s)))
-          .find(Boolean) || "";
-      const fromMeta = (name) =>
-        normalize(
-          document.querySelector(`meta[property="${name}"]`)?.content ||
-            document.querySelector(`meta[name="${name}"]`)?.content ||
-            ""
-        );
-      const parseJsonLd = () => {
-        const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
-        for (const script of scripts) {
-          try {
-            const parsed = JSON.parse(script.textContent || "{}");
-            const list = Array.isArray(parsed) ? parsed : [parsed];
-            for (const node of list) {
-              const t = normalize((node && (node["@type"] || node.type)) || "").toLowerCase();
-              if (!t.includes("jobposting")) continue;
-              const company =
-                normalize(node?.hiringOrganization?.name || "") ||
-                normalize(node?.hiringOrganization || "");
-              return {
-                title: normalize(node?.title || ""),
-                company,
-                location: normalize(
-                  node?.jobLocation?.address?.addressLocality ||
-                    node?.jobLocation?.name ||
-                    ""
-                ),
-                description: normalize(node?.description || ""),
-                deadline: normalize(node?.validThrough || ""),
-              };
-            }
-          } catch (_) {
-            // ignore invalid json-ld
-          }
-        }
-        return null;
-      };
-
-      const jsonLd = parseJsonLd();
-      const ogTitle = fromMeta("og:title");
-      const ogDesc = fromMeta("og:description") || fromMeta("description");
-      const title =
-        fromSelectors(["h1", ".job-title", "[data-testid='job-title']"]) ||
-        jsonLd?.title ||
-        ogTitle ||
-        normalize(document.title || "");
-
-      let company = "";
-      let locationText = "";
-      if (host.includes("linkedin.com")) {
-        company = fromSelectors([
-          '[data-test-id="job-details-company-name"]',
-          ".jobs-unified-top-card__company-name",
-          '[data-testid="company-name"]',
-        ]);
-        locationText = fromSelectors([
-          ".jobs-unified-top-card__bullet",
-          '[data-testid="job-location"]',
-        ]);
-      } else if (host.includes("welcometothejungle.com")) {
-        company = fromSelectors([
-          '[data-testid="company-name"]',
-          "a[href*='/companies/']",
-          ".sc-1n9xk8f-0",
-        ]);
-        locationText = fromSelectors([
-          '[data-testid="job-location"]',
-          "[class*='location']",
-        ]);
-      } else if (host.includes("jobteaser.com")) {
-        company = fromSelectors([
-          '[data-testid=\"company-name\"]',
-          "a[href*='/companies/']",
-          ".company-name",
-        ]);
-        locationText = fromSelectors(["[data-testid='job-location']", ".job-location"]);
-      }
-      if (!company) company = jsonLd?.company || "";
-      if (!locationText) locationText = jsonLd?.location || "";
-      const desc =
-        fromSelectors([
-          ".jobs-description-content__text",
-          '[data-testid=\"job-description\"]',
-          ".job-description",
-          "main article",
-        ]) ||
-        jsonLd?.description ||
-        normalize(ogDesc);
-      return {
-        title,
-        company,
-        location: locationText,
-        description: desc.slice(0, 1200),
-        url: location.href,
-        source: host.toLowerCase(),
-        deadline: jsonLd?.deadline || "",
-        applied: false,
-      };
-    },
-  });
-  const payload = result || {};
-  payload.title = normalizeText(payload.title || "");
-  payload.company = normalizeText(payload.company || inferCompanyFromUrl(payload.url || ""));
-  payload.url = normalizeText(payload.url || url);
-  payload.description = normalizeText(payload.description || "");
-  payload.source = normalizeText(payload.source || "");
-  if (!payload.title || !payload.url) return;
-
-  const fp = buildPipelineFingerprint(payload);
-  if (await shouldSkipRecentPipelineImport(fp)) return;
-  await upsertToNotion(payload);
-}
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const candidateUrl = changeInfo.url || tab?.url || "";
@@ -4021,7 +4574,5 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       })
       .catch(() => {});
   }
-  if (changeInfo.url || changeInfo.status === "complete") {
-    autoImportFromTab(tabId, candidateUrl).catch(() => {});
-  }
+  // Pipeline auto-import removed.
 });

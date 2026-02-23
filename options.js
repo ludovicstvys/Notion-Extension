@@ -8,8 +8,6 @@ const bdfApiKeyEl = document.getElementById("bdf-api-key");
 const googlePlacesApiKeyEl = document.getElementById("google-places-api-key");
 const todoDbEl = document.getElementById("todo-db");
 const todoStatusEl = document.getElementById("todo-status");
-const pipelineAutoImportEnabledEl = document.getElementById("pipeline-auto-import-enabled");
-const pipelineAutoImportStatusEl = document.getElementById("pipeline-auto-import-status");
 const gcalLoginBtn = document.getElementById("gcal-login");
 const gcalLogoutBtn = document.getElementById("gcal-logout");
 const gcalStatusEl = document.getElementById("gcal-status");
@@ -103,20 +101,6 @@ chrome.storage.local.get(["googlePlacesApiKey"], (v) => {
   if (googlePlacesApiKeyEl) {
     googlePlacesApiKeyEl.value =
       v.googlePlacesApiKey ?? LOCAL_DEFAULTS.googlePlacesApiKey ?? "";
-  }
-});
-chrome.storage.local.get(["pipelineAutoImportEnabled"], (v) => {
-  if (pipelineAutoImportEnabledEl) {
-    const enabled =
-      v.pipelineAutoImportEnabled !== undefined
-        ? v.pipelineAutoImportEnabled === true
-        : LOCAL_DEFAULTS.pipelineAutoImportEnabled !== false;
-    pipelineAutoImportEnabledEl.checked = enabled;
-    if (pipelineAutoImportStatusEl) {
-      pipelineAutoImportStatusEl.textContent = enabled
-        ? "Pipeline auto activé."
-        : "Pipeline auto désactivé.";
-    }
   }
 });
 let urlBlockerRules = [];
@@ -254,13 +238,7 @@ document.getElementById("save").addEventListener("click", async () => {
   });
   const bdfApiKey = bdfApiKeyEl?.value?.trim() || "";
   const googlePlacesApiKey = googlePlacesApiKeyEl?.value?.trim() || "";
-  const pipelineAutoImportEnabled = !!pipelineAutoImportEnabledEl?.checked;
-  await chrome.storage.local.set({ bdfApiKey, googlePlacesApiKey, pipelineAutoImportEnabled });
-  if (pipelineAutoImportStatusEl) {
-    pipelineAutoImportStatusEl.textContent = pipelineAutoImportEnabled
-      ? "Pipeline auto activé."
-      : "Pipeline auto désactivé.";
-  }
+  await chrome.storage.local.set({ bdfApiKey, googlePlacesApiKey });
 
   dbEl.value = normalizedDbId;
   if (todoDbEl && normalizedTodoDbId) todoDbEl.value = normalizedTodoDbId;
@@ -387,20 +365,111 @@ if (checkBtn) {
   });
 }
 
-function refreshGcalStatus() {
-  if (!gcalStatusEl) return;
-  gcalStatusEl.textContent = "Verification...";
-  chrome.runtime.sendMessage({ type: "GCAL_AUTH_STATUS" }, (res) => {
-    if (chrome.runtime.lastError) {
-      gcalStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-      return;
-    }
-    if (!res?.ok) {
-      gcalStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
-      return;
-    }
-    gcalStatusEl.textContent = res.connected ? "Connecte." : "Non connecte.";
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sendRuntimeMessage(message, attempts = 2) {
+  const maxAttempts = Math.max(1, Number.parseInt(attempts, 10) || 1);
+  return new Promise((resolve) => {
+    const run = (attempt) => {
+      chrome.runtime.sendMessage(message, (res) => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          const text = String(runtimeError.message || "").toLowerCase();
+          const retryable =
+            text.includes("message port closed") ||
+            text.includes("receiving end does not exist") ||
+            text.includes("could not establish connection");
+          if (retryable && attempt < maxAttempts) {
+            setTimeout(() => run(attempt + 1), 150);
+            return;
+          }
+          resolve({ ok: false, error: runtimeError.message || "Erreur extension inconnue." });
+          return;
+        }
+        if (res === undefined && attempt < maxAttempts) {
+          setTimeout(() => run(attempt + 1), 150);
+          return;
+        }
+        resolve(res || { ok: false, error: "Aucune reponse du service worker." });
+      });
+    };
+    run(1);
   });
+}
+
+function requestGoogleTokenInteractive() {
+  return new Promise((resolve, reject) => {
+    if (!chrome?.identity?.getAuthToken) {
+      reject(new Error("API Google Identity indisponible."));
+      return;
+    }
+    chrome.identity.getAuthToken({ interactive: true }, (token) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message || "Connexion Google impossible."));
+        return;
+      }
+      if (!token) {
+        reject(new Error("Aucun token Google recu."));
+        return;
+      }
+      resolve(token);
+    });
+  });
+}
+
+function isGoogleAuthCancelled(message) {
+  const text = String(message || "").toLowerCase();
+  return text.includes("user did not approve") || text.includes("access_denied") || text.includes("cancel");
+}
+
+async function connectGoogleRobust() {
+  try {
+    await requestGoogleTokenInteractive();
+    return { ok: true };
+  } catch (directErr) {
+    if (isGoogleAuthCancelled(directErr?.message)) {
+      return { ok: false, error: directErr?.message || "Connexion Google annulee." };
+    }
+    const fallback = await sendRuntimeMessage({ type: "GCAL_CONNECT" }, 2);
+    if (fallback?.ok) return fallback;
+    const directMessage = directErr?.message || "";
+    const fallbackMessage = fallback?.error || "";
+    return {
+      ok: false,
+      error: fallbackMessage || directMessage || "Connexion Google impossible.",
+    };
+  }
+}
+
+let gcalConnectionState = null;
+
+function setGcalStatus(text = "") {
+  if (!gcalStatusEl) return;
+  let prefix = "Statut inconnu.";
+  if (gcalConnectionState === true) prefix = "Connecte.";
+  if (gcalConnectionState === false) prefix = "Non connecte.";
+  const detail = String(text || "").trim();
+  gcalStatusEl.textContent = detail ? `${prefix} ${detail}` : prefix;
+}
+
+function setGcalStatusRaw(text) {
+  if (!gcalStatusEl) return;
+  gcalStatusEl.textContent = String(text || "").trim();
+}
+
+async function refreshGcalStatus() {
+  if (!gcalStatusEl) return { ok: false, error: "Status UI indisponible." };
+  setGcalStatusRaw("Verification connexion...");
+  const res = await sendRuntimeMessage({ type: "GCAL_AUTH_STATUS" }, 2);
+  if (!res?.ok) {
+    setGcalStatusRaw(`Erreur: ${res?.error || "inconnue"}`);
+    return res || { ok: false, error: "inconnue" };
+  }
+  gcalConnectionState = !!res.connected;
+  setGcalStatus();
+  return res;
 }
 
 function setCalendarOptions(items) {
@@ -418,58 +487,134 @@ function setCalendarOptions(items) {
   });
 }
 
-function loadCalendarsIntoSelect() {
-  if (!gcalDefaultEl) return;
-  gcalStatusEl.textContent = "Chargement calendriers...";
-  chrome.runtime.sendMessage({ type: "GCAL_LIST_CALENDARS" }, (res) => {
-    if (!res?.ok) {
-      gcalStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
-      return;
+async function loadCalendarsIntoSelect(options = {}) {
+  if (!gcalDefaultEl || !gcalStatusEl) return { ok: false, error: "UI indisponible." };
+  const tries = Math.max(1, Number.parseInt(options?.retries, 10) || 1);
+  if (gcalConnectionState === null) {
+    setGcalStatusRaw("Chargement calendriers...");
+  } else {
+    setGcalStatus("Chargement calendriers...");
+  }
+
+  let res = null;
+  for (let attempt = 1; attempt <= tries; attempt += 1) {
+    res = await sendRuntimeMessage({ type: "GCAL_LIST_CALENDARS" }, 2);
+    if (res?.ok) break;
+    if (attempt < tries) {
+      await waitMs(250);
     }
-    setCalendarOptions(res.items || []);
-    gcalStatusEl.textContent = "Calendriers charges.";
-  });
+  }
+
+  if (!res?.ok) {
+    const errText = res?.error || "inconnue";
+    if (
+      res?.code === "AUTH_REQUIRED" ||
+      /authentification|oauth|token|reconnecte/i.test(String(errText))
+    ) {
+      gcalConnectionState = false;
+    }
+    if (gcalConnectionState === null) {
+      setGcalStatusRaw(`Erreur: ${errText}`);
+    } else {
+      setGcalStatus(`Erreur calendriers: ${errText}`);
+    }
+    return res || { ok: false, error: "inconnue" };
+  }
+  gcalConnectionState = true;
+  setCalendarOptions(res.items || []);
+  const count = Array.isArray(res.items) ? res.items.length : 0;
+  setGcalStatus(`Calendriers charges (${count}).`);
+  return res;
 }
 
+let gcalConnectInProgress = false;
+let gcalLogoutInProgress = false;
+
 if (gcalLoginBtn) {
-  gcalLoginBtn.addEventListener("click", () => {
-    if (!gcalStatusEl) return;
-    gcalStatusEl.textContent = "Connexion...";
-    chrome.runtime.sendMessage({ type: "GCAL_CONNECT" }, (res) => {
-      if (chrome.runtime.lastError) {
-        gcalStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-        refreshDiagnostics(false);
+  gcalLoginBtn.addEventListener("click", async () => {
+    if (!gcalStatusEl || gcalConnectInProgress) return;
+    gcalConnectInProgress = true;
+    gcalLoginBtn.disabled = true;
+    if (gcalLogoutBtn) gcalLogoutBtn.disabled = true;
+    if (gcalRefreshBtn) gcalRefreshBtn.disabled = true;
+    setGcalStatusRaw("Connexion...");
+    try {
+      const connectRes = await connectGoogleRobust();
+      if (!connectRes?.ok) {
+        setGcalStatusRaw(`Erreur: ${connectRes?.error || "inconnue"}`);
         return;
       }
-      if (!res?.ok) {
-        gcalStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
-        refreshDiagnostics(false);
+
+      let connected = false;
+      for (let i = 0; i < 3; i += 1) {
+        const status = await sendRuntimeMessage({ type: "GCAL_AUTH_STATUS" }, 2);
+        if (status?.ok && status.connected) {
+          connected = true;
+          break;
+        }
+        await waitMs(250);
+      }
+      if (!connected) {
+        gcalConnectionState = false;
+        setGcalStatus("Connexion non confirmee.");
         return;
       }
-      refreshGcalStatus();
-      loadCalendarsIntoSelect();
+      gcalConnectionState = true;
+
+      const calendarsRes = await loadCalendarsIntoSelect({ retries: 3 });
+      if (!calendarsRes?.ok) return;
+      await refreshGcalStatus();
+    } finally {
+      gcalConnectInProgress = false;
+      gcalLoginBtn.disabled = false;
+      if (gcalLogoutBtn) gcalLogoutBtn.disabled = false;
+      if (gcalRefreshBtn) gcalRefreshBtn.disabled = false;
       refreshDiagnostics(false);
-    });
+    }
   });
 }
 
 if (gcalLogoutBtn) {
-  gcalLogoutBtn.addEventListener("click", () => {
-    if (!gcalStatusEl) return;
-    gcalStatusEl.textContent = "Deconnexion...";
-    chrome.runtime.sendMessage({ type: "GCAL_LOGOUT" }, () => {
-      refreshGcalStatus();
+  gcalLogoutBtn.addEventListener("click", async () => {
+    if (!gcalStatusEl || gcalLogoutInProgress) return;
+    gcalLogoutInProgress = true;
+    gcalLogoutBtn.disabled = true;
+    if (gcalLoginBtn) gcalLoginBtn.disabled = true;
+    if (gcalRefreshBtn) gcalRefreshBtn.disabled = true;
+    setGcalStatusRaw("Deconnexion...");
+    try {
+      const res = await sendRuntimeMessage({ type: "GCAL_LOGOUT" }, 2);
+      if (!res?.ok) {
+        setGcalStatusRaw(`Erreur: ${res?.error || "inconnue"}`);
+        return;
+      }
+      gcalConnectionState = false;
+      if (gcalDefaultEl) gcalDefaultEl.innerHTML = "";
+      await refreshGcalStatus();
+    } finally {
+      gcalLogoutInProgress = false;
+      gcalLogoutBtn.disabled = false;
+      if (gcalLoginBtn) gcalLoginBtn.disabled = false;
+      if (gcalRefreshBtn) gcalRefreshBtn.disabled = false;
       refreshDiagnostics(false);
-    });
+    }
   });
 }
 
-refreshGcalStatus();
-loadCalendarsIntoSelect();
+(async () => {
+  const status = await refreshGcalStatus();
+  if (status?.ok && status.connected) {
+    await loadCalendarsIntoSelect({ retries: 2 });
+  } else if (gcalDefaultEl) {
+    gcalDefaultEl.innerHTML = "";
+  }
+})();
 refreshNotionSyncStatus();
 
 if (gcalRefreshBtn) {
-  gcalRefreshBtn.addEventListener("click", loadCalendarsIntoSelect);
+  gcalRefreshBtn.addEventListener("click", () => {
+    loadCalendarsIntoSelect({ retries: 2 });
+  });
 }
 
 gcalDefaultEl?.addEventListener("change", () => {
@@ -973,8 +1118,12 @@ if (importBtn) {
       const parsed = JSON.parse(configDataEl?.value || "{}");
       await importConfig(parsed);
       if (configStatusEl) configStatusEl.textContent = "Configuration importee.";
-      refreshGcalStatus();
-      loadCalendarsIntoSelect();
+      const auth = await refreshGcalStatus();
+      if (auth?.ok && auth.connected) {
+        await loadCalendarsIntoSelect({ retries: 2 });
+      } else if (gcalDefaultEl) {
+        gcalDefaultEl.innerHTML = "";
+      }
       refreshNotionSyncStatus();
       loadTagRules();
       loadDeadlinePrefs();
@@ -1006,10 +1155,6 @@ if (importBtn) {
       if (focusEnabledEl) focusEnabledEl.checked = parsed?.local?.focusModeEnabled === true;
       if (pomodoroWorkEl) pomodoroWorkEl.value = String(parsed?.local?.pomodoroWork || 25);
       if (pomodoroBreakEl) pomodoroBreakEl.value = String(parsed?.local?.pomodoroBreak || 5);
-      if (pipelineAutoImportEnabledEl) {
-        pipelineAutoImportEnabledEl.checked =
-          parsed?.local?.pipelineAutoImportEnabled !== false;
-      }
       refreshColumns();
       refreshDiagnostics(false);
     } catch (e) {

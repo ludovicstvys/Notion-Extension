@@ -375,9 +375,34 @@ function renderNotionTodos(items) {
     doneBtn.textContent = "Marquer Done";
     doneBtn.addEventListener("click", (e) => {
       e.stopPropagation();
+      doneBtn.disabled = true;
       chrome.runtime.sendMessage(
         { type: "UPDATE_TODO_NOTION", payload: { id: item.id, status: "Done" } },
-        () => loadNotionTodos()
+        (res) => {
+          doneBtn.disabled = false;
+          if (chrome.runtime.lastError) {
+            if (todoNotionStatusEl) {
+              todoNotionStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
+            }
+            return;
+          }
+          if (!res?.ok) {
+            const err = normalizeText(res?.error || "inconnue");
+            if (/expected to be status|expected to be select|message inconnu\./i.test(err)) {
+              if (todoNotionStatusEl) {
+                todoNotionStatusEl.textContent =
+                  "Erreur de version extension. Recharge l'extension dans chrome://extensions puis reessaie.";
+              }
+              return;
+            }
+            if (todoNotionStatusEl) {
+              todoNotionStatusEl.textContent = `Erreur: ${err}`;
+            }
+            return;
+          }
+          if (todoNotionStatusEl) todoNotionStatusEl.textContent = "";
+          loadNotionTodos();
+        }
       );
     });
     row.appendChild(doneBtn);

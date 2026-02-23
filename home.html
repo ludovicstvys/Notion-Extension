@@ -155,6 +155,8 @@
       .events, .list {
         display: grid;
         gap: 8px;
+        align-content: start;
+        grid-auto-rows: max-content;
       }
       .card .events,
       .card .list,
@@ -293,6 +295,26 @@
         background: rgba(11, 19, 36, 0.9);
         color: var(--text);
         font-size: 13px;
+      }
+      #todo-notion-list {
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      #todo-notion-list .event-chip {
+        align-content: start;
+        max-height: 170px;
+        overflow: hidden;
+      }
+      #todo-notion-list .event-title {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+      #todo-notion-list .btn {
+        justify-self: start;
+        min-width: 128px;
       }
       .todo-input::placeholder { color: rgba(148, 163, 184, 0.6); }
       @media (max-width: 520px) {

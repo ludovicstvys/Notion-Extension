@@ -257,6 +257,19 @@
         font-size: 11px;
         cursor: pointer;
       }
+      .stage-sync-controls {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .stage-sync-controls .note {
+        margin: 0;
+      }
+      .stage-refresh-btn[disabled] {
+        opacity: 0.55;
+        cursor: default;
+      }
       .stage-open-list {
         display: grid;
         gap: 8px;
@@ -346,8 +359,35 @@
         border-radius: 12px;
         padding: 10px;
         min-height: 220px;
+        max-height: min(62vh, 560px);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .kanban-cards {
         display: grid;
         gap: 8px;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding-right: 4px;
+        scrollbar-gutter: stable;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(148, 163, 184, 0.55) rgba(11, 19, 36, 0.55);
+      }
+      .kanban-cards::-webkit-scrollbar {
+        width: 8px;
+      }
+      .kanban-cards::-webkit-scrollbar-track {
+        background: rgba(11, 19, 36, 0.55);
+        border-radius: 999px;
+      }
+      .kanban-cards::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.55);
+        border-radius: 999px;
+      }
+      .kanban-cards::-webkit-scrollbar-thumb:hover {
+        background: rgba(148, 163, 184, 0.75);
       }
       .kanban-header {
         display: flex;
@@ -420,6 +460,15 @@
       <a href="search.html">Recherche</a>
     </nav>
     <a class="settings-btn" href="options.html" aria-label="Options">&#9881;</a>
+
+    <section class="card">
+      <div class="stage-sync-controls">
+        <p class="note" id="stage-sync-text">Derniere sync: -</p>
+        <button class="stage-open-toggle stage-refresh-btn" id="stage-refresh-btn" type="button">
+          Rafraichir
+        </button>
+      </div>
+    </section>
     
     <section class="card">
       <div class="stage-open-controls">
@@ -459,18 +508,7 @@
       <div class="list" id="stage-kpi-list"></div>
     </section>
 
-    <section class="card">
-      <h2>Blocages process (SLA)</h2>
-      <p class="note" id="stage-blockers-status">Chargement...</p>
-      <div class="list" id="stage-blockers-list"></div>
-    </section>
-
-    <section class="card">
-      <h2>Qualité des données</h2>
-      <p class="note" id="stage-quality-status">Chargement...</p>
-      <div class="list" id="stage-quality-list"></div>
-    </section>
-
+    
     <section class="card">
       <div class="kanban-tabs">
         <button class="kanban-tab active" id="kanban-tab-list" type="button">Liste</button>

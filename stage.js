@@ -16,15 +16,17 @@ const kanbanBoardView = document.getElementById("kanban-view-board");
 const kanbanStatusEl = document.getElementById("kanban-status");
 const stageKpiWeekEl = document.getElementById("stage-kpi-week");
 const stageKpiListEl = document.getElementById("stage-kpi-list");
-const stageBlockersStatusEl = document.getElementById("stage-blockers-status");
-const stageBlockersListEl = document.getElementById("stage-blockers-list");
-const stageQualityStatusEl = document.getElementById("stage-quality-status");
-const stageQualityListEl = document.getElementById("stage-quality-list");
+const stageSyncTextEl = document.getElementById("stage-sync-text");
+const stageRefreshBtn = document.getElementById("stage-refresh-btn");
 
 let stats = null;
 let segments = [];
 let allStages = [];
 let kanbanStatus = "Ouvert";
+let stageDashboardSnapshot = null;
+let filteredStages = [];
+let allStagesRenderCount = 0;
+let dashboardFollowupTimer = null;
 
 const KANBAN_COLUMNS = [
   { key: "ouvert", label: "Ouvert" },
@@ -41,6 +43,7 @@ const KANBAN_WIP_LIMITS = {
 const STAGE_VIEW_MODE_KEY = "stageViewMode";
 const STAGE_VIEW_LIST = "list";
 const STAGE_VIEW_BOARD = "board";
+const ALL_STAGES_PAGE_SIZE = 140;
 
 function normalizeText(input) {
   const text = (input ?? "").toString();
@@ -49,11 +52,115 @@ function normalizeText(input) {
 
 function normalizeStatus(value) {
   const v = normalizeText(value).toLowerCase();
-  if (v.startsWith("ouv")) return "ouvert";
-  if (v.includes("candidature") || v.includes("postul")) return "candidature";
-  if (v.includes("entretien") || v.includes("interview")) return "entretien";
+  if (v === "ouvert") return "ouvert";
   if (v.includes("refus") || v.includes("recal")) return "refuse";
-  return "ouvert";
+  if (v.includes("entretien") || v.includes("interview")) return "entretien";
+  if (v.includes("candidature") || v.includes("postul") || v.includes("envoy")) return "candidature";
+  return "candidature";
+}
+
+function isOpenStageStatus(value) {
+  return normalizeText(value).toLowerCase() === "ouvert";
+}
+
+function isAppliedStageStatus(value) {
+  const norm = normalizeText(value).toLowerCase();
+  if (norm.includes("refus") || norm.includes("recal")) return false;
+  return (
+    norm === "candidature envoy?e" ||
+    norm === "candidature envoyee" ||
+    norm === "candidatures envoy?es" ||
+    norm === "candidatures envoyees" ||
+    norm === "postul?" ||
+    norm === "postule" ||
+    norm === "envoy?e" ||
+    norm === "envoyee" ||
+    norm.includes("candidature") ||
+    norm.includes("postul")
+  );
+}
+
+function computeStatsFromItems(items) {
+  const counts = new Map();
+  (items || []).forEach((item) => {
+    const key = normalizeText(item?.status || "Non renseigne") || "Non renseigne";
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  let open = 0;
+  let applied = 0;
+  let recale = 0;
+  const otherBreakdown = [];
+  counts.forEach((count, status) => {
+    const norm = normalizeText(status).toLowerCase();
+    if (norm === "ouvert") {
+      open += count;
+      return;
+    }
+    if (norm === "recal?" || norm === "recale" || norm.includes("refus") || norm.includes("recal")) {
+      recale += count;
+      return;
+    }
+    if (isAppliedStageStatus(status)) {
+      applied += count;
+      return;
+    }
+    otherBreakdown.push({ status, count });
+  });
+  otherBreakdown.sort((a, b) => b.count - a.count);
+  const total = (items || []).length;
+  return {
+    ok: true,
+    total,
+    open,
+    applied,
+    recale,
+    other: Math.max(0, total - open - applied - recale),
+    otherBreakdown,
+    capped: false,
+  };
+}
+
+function debounce(fn, waitMs = 120) {
+  let timer = null;
+  return (...args) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), waitMs);
+  };
+}
+
+function setSyncState(snapshot, loading = false) {
+  if (!stageSyncTextEl) return;
+  if (loading) {
+    stageSyncTextEl.textContent = "Sync: chargement...";
+    return;
+  }
+  if (!snapshot) {
+    stageSyncTextEl.textContent = "Derniere sync: -";
+    return;
+  }
+  const d = new Date(snapshot.generatedAt || Date.now());
+  const hhmm = d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  const source =
+    snapshot.stale
+      ? "cache stale"
+      : snapshot.source === "cache"
+        ? "cache"
+        : "reseau";
+  stageSyncTextEl.textContent = `Derniere sync ${hhmm} (${source})`;
+}
+
+function setRefreshBusy(busy) {
+  if (!stageRefreshBtn) return;
+  stageRefreshBtn.disabled = !!busy;
+  stageRefreshBtn.textContent = busy ? "Rafraichissement..." : "Rafraichir";
+}
+
+function isUnknownMessageError(resOrText) {
+  const raw =
+    typeof resOrText === "string"
+      ? resOrText
+      : normalizeText(resOrText?.error || resOrText?.message || "");
+  return normalizeText(raw).toLowerCase() === "message inconnu.";
 }
 
 function findColumnLabelByKey(key) {
@@ -106,136 +213,7 @@ function renderWeeklyKpis(data) {
 }
 
 function loadWeeklyKpis() {
-  chrome.runtime.sendMessage({ type: "GET_STAGE_WEEKLY_KPIS" }, (res) => {
-    if (chrome.runtime.lastError) {
-      renderWeeklyKpis({ ok: false });
-      return;
-    }
-    renderWeeklyKpis(res);
-  });
-}
-
-function renderStageBlockers(items) {
-  if (!stageBlockersListEl) return;
-  stageBlockersListEl.innerHTML = "";
-  if (!items || items.length === 0) {
-    if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = "Aucun blocage détecté.";
-    return;
-  }
-  if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = `${items.length} blocage(s)`;
-  items.forEach((item) => {
-    const row = document.createElement("div");
-    row.className = "stage-row";
-    const title = document.createElement("div");
-    title.className = "stage-company";
-    title.textContent = normalizeText([item.company, item.title].filter(Boolean).join(" - ")) || "Stage";
-    row.appendChild(title);
-    const meta = document.createElement("div");
-    meta.className = "stage-role";
-    meta.textContent = `${item.reason} (${item.stagnantDays} jours)`;
-    row.appendChild(meta);
-
-    const actions = document.createElement("div");
-    actions.className = "quick-actions";
-    const nextBtn = document.createElement("button");
-    nextBtn.className = "quick-btn";
-    nextBtn.textContent = `Passer ${item.suggestedNextStatus}`;
-    nextBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      updateStageStatus(item.id, item.suggestedNextStatus);
-    });
-    actions.appendChild(nextBtn);
-    if (item.url) {
-      const openBtn = document.createElement("button");
-      openBtn.className = "quick-btn";
-      openBtn.textContent = "Ouvrir lien";
-      openBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        window.open(item.url, "_blank", "noreferrer");
-      });
-      actions.appendChild(openBtn);
-    }
-    row.appendChild(actions);
-    stageBlockersListEl.appendChild(row);
-  });
-}
-
-function loadStageBlockers() {
-  if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = "Chargement...";
-  chrome.runtime.sendMessage({ type: "GET_STAGE_BLOCKERS" }, (res) => {
-    if (chrome.runtime.lastError) {
-      if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-      renderStageBlockers([]);
-      return;
-    }
-    if (!res?.ok) {
-      if (stageBlockersStatusEl) stageBlockersStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
-      renderStageBlockers([]);
-      return;
-    }
-    renderStageBlockers(res.items || []);
-  });
-}
-
-function renderDataQualityIssues(items) {
-  if (!stageQualityListEl) return;
-  stageQualityListEl.innerHTML = "";
-  if (!items || items.length === 0) {
-    if (stageQualityStatusEl) stageQualityStatusEl.textContent = "Aucune anomalie.";
-    return;
-  }
-  if (stageQualityStatusEl) stageQualityStatusEl.textContent = `${items.length} point(s) à corriger`;
-  items.forEach((issue) => {
-    const row = document.createElement("div");
-    row.className = "stage-row";
-    const title = document.createElement("div");
-    title.className = "stage-company";
-    title.textContent = `${normalizeText(issue.title || "Stage")} - ${issue.field}`;
-    row.appendChild(title);
-    const meta = document.createElement("div");
-    meta.className = "stage-role";
-    meta.textContent = issue.suggestedValue
-      ? `Suggestion: ${issue.suggestedValue}`
-      : "Aucune suggestion automatique.";
-    row.appendChild(meta);
-    const actions = document.createElement("div");
-    actions.className = "quick-actions";
-    if (issue.suggestedValue) {
-      const applyBtn = document.createElement("button");
-      applyBtn.className = "quick-btn";
-      applyBtn.textContent = "Appliquer suggestion";
-      applyBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        chrome.runtime.sendMessage(
-          {
-            type: "APPLY_STAGE_QUALITY_FIX",
-            payload: { id: issue.id, field: issue.field, value: issue.suggestedValue },
-          },
-          () => loadStageDataQuality()
-        );
-      });
-      actions.appendChild(applyBtn);
-    }
-    row.appendChild(actions);
-    stageQualityListEl.appendChild(row);
-  });
-}
-
-function loadStageDataQuality() {
-  if (stageQualityStatusEl) stageQualityStatusEl.textContent = "Chargement...";
-  chrome.runtime.sendMessage({ type: "GET_STAGE_DATA_QUALITY" }, (res) => {
-    if (chrome.runtime.lastError) {
-      if (stageQualityStatusEl) stageQualityStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-      renderDataQualityIssues([]);
-      return;
-    }
-    if (!res?.ok) {
-      if (stageQualityStatusEl) stageQualityStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
-      renderDataQualityIssues([]);
-      return;
-    }
-    renderDataQualityIssues(res.items || []);
-  });
+  renderWeeklyKpis(stageDashboardSnapshot?.weeklyKpis || { ok: false });
 }
 
 function makeKanbanQuickActions(item, colKey) {
@@ -403,22 +381,18 @@ function onMouseLeave() {
 }
 
 function loadStats() {
-  statusEl.textContent = "Chargement...";
-  chrome.runtime.sendMessage({ type: "GET_STAGE_STATUS_STATS" }, (res) => {
-    if (chrome.runtime.lastError) {
-      statusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-      return;
-    }
-    if (!res?.ok) {
-      statusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
-      return;
-    }
-    stats = res;
-    buildSegments(res);
-    setCenterText();
-    drawChart();
-    statusEl.textContent = "";
-  });
+  const next = stageDashboardSnapshot?.stats || computeStatsFromItems(allStages);
+  if (!next?.ok) {
+    statusEl.textContent = "Erreur: stats indisponibles";
+    return;
+  }
+  stats = next;
+  buildSegments(next);
+  setCenterText();
+  drawChart();
+  if (statusEl) {
+    statusEl.textContent = stageDashboardSnapshot?.stale ? "Affichage depuis le cache..." : "";
+  }
 }
 
 if (canvas) {
@@ -431,6 +405,7 @@ function renderKanban() {
   if (!kanbanBoardEl) return;
   kanbanBoardEl.innerHTML = "";
   if (kanbanStatusEl) kanbanStatusEl.textContent = "";
+  const boardFrag = document.createDocumentFragment();
   const groups = KANBAN_COLUMNS.reduce((acc, col) => {
     acc[col.key] = [];
     return acc;
@@ -452,10 +427,10 @@ function renderKanban() {
     const limit = KANBAN_WIP_LIMITS[col.key] ?? 999;
     const over = count > limit;
     header.innerHTML = `<span>${col.label}</span><span class="kanban-count${over ? " over-limit" : ""}">${count}/${limit}</span>`;
-    if (over && kanbanStatusEl) {
-      kanbanStatusEl.textContent = `WIP dépassé: ${col.label} (${count}/${limit}).`;
-    }
     column.appendChild(header);
+    const cardsWrap = document.createElement("div");
+    cardsWrap.className = "kanban-cards";
+    const cardsFrag = document.createDocumentFragment();
 
     groups[col.key].forEach((item) => {
       const card = document.createElement("div");
@@ -495,8 +470,10 @@ function renderKanban() {
         });
       });
 
-      column.appendChild(card);
+      cardsFrag.appendChild(card);
     });
+    cardsWrap.appendChild(cardsFrag);
+    column.appendChild(cardsWrap);
 
     column.addEventListener("dragover", (e) => {
       e.preventDefault();
@@ -510,8 +487,9 @@ function renderKanban() {
       updateStageStatus(id, targetStatus);
     });
 
-    kanbanBoardEl.appendChild(column);
+    boardFrag.appendChild(column);
   });
+  kanbanBoardEl.appendChild(boardFrag);
 }
 
 function updateStageStatus(id, status) {
@@ -530,10 +508,17 @@ function updateStageStatus(id, status) {
         if (kanbanStatusEl) kanbanStatusEl.textContent = "";
         item.status = status;
         renderKanban();
-        applyAllStagesFilter();
-        loadWeeklyKpis();
-        loadStageBlockers();
-        loadStageDataQuality();
+        applyAllStagesFilter({ reset: false });
+        stageDashboardSnapshot = {
+          ...(stageDashboardSnapshot || {}),
+          allStages: allStages.slice(),
+          openStages: allStages.filter((s) => isOpenStageStatus(s.status)),
+          stats: computeStatsFromItems(allStages),
+          stale: true,
+        };
+        renderOpenStages(stageDashboardSnapshot.openStages);
+        loadStats();
+        queueDashboardRefresh(250);
       } else {
         const msg = `Erreur: ${res?.error || "mise a jour impossible"}`;
         if (kanbanStatusEl) kanbanStatusEl.textContent = msg;
@@ -568,13 +553,18 @@ function deleteStage(id, label) {
         return;
       }
       allStages = allStages.filter((stage) => stage.id !== stageId);
-      applyAllStagesFilter();
+      applyAllStagesFilter({ reset: false });
       renderKanban();
-      loadOpenStages();
+      stageDashboardSnapshot = {
+        ...(stageDashboardSnapshot || {}),
+        allStages: allStages.slice(),
+        openStages: allStages.filter((s) => isOpenStageStatus(s.status)),
+        stats: computeStatsFromItems(allStages),
+        stale: true,
+      };
+      renderOpenStages(stageDashboardSnapshot.openStages);
       loadStats();
-      loadWeeklyKpis();
-      loadStageBlockers();
-      loadStageDataQuality();
+      queueDashboardRefresh(250);
     }
   );
 }
@@ -586,7 +576,12 @@ function renderOpenStages(items) {
     if (openStatusEl) openStatusEl.textContent = "Aucun stage ouvert.";
     return;
   }
-  if (openStatusEl) openStatusEl.textContent = "";
+  if (openStatusEl) {
+    openStatusEl.textContent = stageDashboardSnapshot?.stale
+      ? `${items.length} stage(s) ouvert(s) - cache`
+      : "";
+  }
+  const fragment = document.createDocumentFragment();
   items.forEach((item) => {
     const row = document.createElement("div");
     row.className = "stage-row";
@@ -653,27 +648,41 @@ function renderOpenStages(items) {
       });
       row.tabIndex = 0;
     }
-    openListEl.appendChild(row);
+    fragment.appendChild(row);
   });
+  openListEl.appendChild(fragment);
 }
 
 function loadOpenStages() {
-  if (openStatusEl) openStatusEl.textContent = "Chargement...";
-  chrome.runtime.sendMessage({ type: "GET_OPEN_STAGES" }, (res) => {
-    if (chrome.runtime.lastError) {
-      if (openStatusEl) {
-        openStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-      }
-      renderOpenStages([]);
-      return;
+  const items = Array.isArray(stageDashboardSnapshot?.openStages)
+    ? stageDashboardSnapshot.openStages.filter((item) => isOpenStageStatus(item?.status))
+    : allStages.filter((item) => isOpenStageStatus(item.status));
+  renderOpenStages(items);
+}
+
+function openStageDetail(item) {
+  const detail = {
+    title: normalizeText([item.company, item.title].filter(Boolean).join(" - ")) || "Stage",
+    meta: "Stage",
+    deadline: item.closeDate || "",
+    status: item.status || "",
+    link: item.url || "",
+    type: "Stage",
+    notes: item.notes || "",
+  };
+  const params = new URLSearchParams();
+  if (item.id) params.set("id", item.id);
+  params.set("title", detail.title);
+  params.set("status", detail.status);
+  params.set("deadline", detail.deadline);
+  params.set("link", detail.link);
+  params.set("type", detail.type);
+  chrome.storage.local.set(
+    { stageDetailId: item.id || "", stageDetailFallback: detail },
+    () => {
+      window.open(`stage-detail.html?${params.toString()}`, "_blank", "noreferrer");
     }
-    if (!res?.ok) {
-      if (openStatusEl) openStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
-      renderOpenStages([]);
-      return;
-    }
-    renderOpenStages(res.items || []);
-  });
+  );
 }
 
 function renderAllStages(items) {
@@ -681,10 +690,18 @@ function renderAllStages(items) {
   allListEl.innerHTML = "";
   if (!items || items.length === 0) {
     if (allStatusEl) allStatusEl.textContent = "Aucun stage.";
+    filteredStages = [];
     return;
   }
-  if (allStatusEl) allStatusEl.textContent = `${items.length} stage(s)`;
-  items.forEach((item) => {
+  const total = items.length;
+  const visible = Math.min(Math.max(allStagesRenderCount, ALL_STAGES_PAGE_SIZE), total);
+  if (allStatusEl) {
+    const suffix = visible < total ? ` - ${visible} affiches` : "";
+    const cacheTag = stageDashboardSnapshot?.stale ? " - cache" : "";
+    allStatusEl.textContent = `${total} stage(s)${suffix}${cacheTag}`;
+  }
+  const fragment = document.createDocumentFragment();
+  items.slice(0, visible).forEach((item) => {
     const row = document.createElement("div");
     row.className = "stage-row";
     const company = document.createElement("div");
@@ -713,66 +730,43 @@ function renderAllStages(items) {
     }
     if (badges.childNodes.length > 0) row.appendChild(badges);
     row.tabIndex = 0;
-    row.addEventListener("click", () => {
-      const detail = {
-        title: normalizeText([item.company, item.title].filter(Boolean).join(" - ")) || "Stage",
-        meta: "Stage",
-        deadline: item.closeDate || "",
-        status: item.status || "",
-        link: item.url || "",
-        type: "Stage",
-        notes: item.notes || "",
-      };
-      const params = new URLSearchParams();
-      if (item.id) params.set("id", item.id);
-      params.set("title", detail.title);
-      params.set("status", detail.status);
-      params.set("deadline", detail.deadline);
-      params.set("link", detail.link);
-      params.set("type", detail.type);
-      chrome.storage.local.set(
-        { stageDetailId: item.id || "", stageDetailFallback: detail },
-        () => {
-          window.open(`stage-detail.html?${params.toString()}`, "_blank", "noreferrer");
-        }
-      );
-    });
+    row.addEventListener("click", () => openStageDetail(item));
     row.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
-        const params = new URLSearchParams();
-        const detail = {
-          title: normalizeText([item.company, item.title].filter(Boolean).join(" - ")) || "Stage",
-          status: item.status || "",
-          deadline: item.closeDate || "",
-          link: item.url || "",
-          type: "Stage",
-          notes: item.notes || "",
-        };
-        if (item.id) params.set("id", item.id);
-        params.set("title", detail.title);
-        params.set("status", detail.status);
-        params.set("deadline", detail.deadline);
-        params.set("link", detail.link);
-        params.set("type", detail.type);
-        chrome.storage.local.set(
-          { stageDetailId: item.id || "", stageDetailFallback: detail },
-          () => {
-            window.open(`stage-detail.html?${params.toString()}`, "_blank", "noreferrer");
-          }
-        );
+        openStageDetail(item);
       }
     });
-    allListEl.appendChild(row);
+    fragment.appendChild(row);
   });
+  if (visible < total) {
+    const moreWrap = document.createElement("div");
+    moreWrap.className = "stage-row";
+    const moreBtn = document.createElement("button");
+    moreBtn.type = "button";
+    moreBtn.className = "quick-btn";
+    moreBtn.textContent = `Afficher plus (${total - visible} restant(s))`;
+    moreBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      allStagesRenderCount += ALL_STAGES_PAGE_SIZE;
+      renderAllStages(filteredStages);
+    });
+    moreWrap.appendChild(moreBtn);
+    fragment.appendChild(moreWrap);
+  }
+  allListEl.appendChild(fragment);
 }
 
-function applyAllStagesFilter() {
+function applyAllStagesFilter(options = {}) {
+  if (options.reset !== false) {
+    allStagesRenderCount = ALL_STAGES_PAGE_SIZE;
+  }
   const query = normalizeText(allSearchEl?.value || "").toLowerCase();
   if (!query) {
-    renderAllStages(allStages);
+    filteredStages = allStages.slice();
+    renderAllStages(filteredStages);
     return;
   }
-  const filtered = allStages.filter((item) => {
+  filteredStages = allStages.filter((item) => {
     const hay = [
       item.company,
       item.title,
@@ -785,64 +779,169 @@ function applyAllStagesFilter() {
       .toLowerCase();
     return hay.includes(query);
   });
-  renderAllStages(filtered);
+  renderAllStages(filteredStages);
 }
 
 function loadAllStages() {
-  if (allStatusEl) allStatusEl.textContent = "Chargement...";
-  chrome.runtime.sendMessage({ type: "GET_ALL_STAGES" }, (res) => {
+  applyAllStagesFilter({ reset: true });
+  renderKanban();
+}
+
+function applyDashboardSnapshot(snapshot, options = {}) {
+  stageDashboardSnapshot = snapshot || null;
+  allStages = Array.isArray(snapshot?.allStages) ? snapshot.allStages.slice() : [];
+  loadStats();
+  loadOpenStages();
+  loadAllStages();
+  const renderSecondary = () => {
+    loadWeeklyKpis();
+  };
+  if (options.deferSecondary) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(renderSecondary);
+    });
+  } else {
+    renderSecondary();
+  }
+  setSyncState(snapshot, false);
+}
+
+function loadLegacyDashboard(options = {}) {
+  setSyncState(stageDashboardSnapshot, true);
+  chrome.runtime.sendMessage({ type: "GET_ALL_STAGES" }, (allRes) => {
     if (chrome.runtime.lastError) {
-      if (allStatusEl) allStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
-      renderAllStages([]);
-      return;
-    }
-    if (!res?.ok) {
-      if (allStatusEl) allStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}. Tentative fallback...`;
-      chrome.runtime.sendMessage({ type: "CHECK_NOTION_DB" }, (fallback) => {
-        if (fallback?.ok && Array.isArray(fallback.rows)) {
-          renderAllStages(fallback.rows);
-        } else {
-          renderAllStages([]);
-        }
-      });
-      return;
-    }
-    const items = Array.isArray(res.items) ? res.items : [];
-    if (items.length === 0) {
-      if (allStatusEl) {
-        if (typeof res.total === "number") {
-          allStatusEl.textContent = res.total === 0 ? "Aucun stage." : "Liste vide. Tentative fallback...";
-        } else {
-          allStatusEl.textContent = "Liste vide. Tentative fallback...";
-        }
+      if (!options.silent && statusEl) {
+        statusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
       }
-      chrome.runtime.sendMessage({ type: "CHECK_NOTION_DB" }, (fallback) => {
-        if (fallback?.ok && Array.isArray(fallback.rows) && fallback.rows.length > 0) {
-          allStages = fallback.rows;
-          applyAllStagesFilter();
-          renderKanban();
-        } else {
-          allStages = [];
-          renderAllStages([]);
-        }
-      });
       return;
     }
-    allStages = items;
-    applyAllStagesFilter();
-    renderKanban();
+    if (!allRes?.ok) {
+      if (!options.silent && statusEl) {
+        statusEl.textContent = `Erreur: ${allRes?.error || "inconnue"}`;
+      }
+      return;
+    }
+    const items = Array.isArray(allRes.items) ? allRes.items : [];
+    const baseSnapshot = {
+      version: 1,
+      generatedAt: Date.now(),
+      source: "network",
+      stale: false,
+      total: items.length,
+      allStages: items,
+      openStages: items.filter((s) => isOpenStageStatus(s.status)),
+      stats: computeStatsFromItems(items),
+      weeklyKpis: { ok: false },
+    };
+    applyDashboardSnapshot(baseSnapshot, { deferSecondary: false });
+
+    chrome.runtime.sendMessage({ type: "GET_STAGE_WEEKLY_KPIS" }, (kpiRes) => {
+      if (!kpiRes?.ok) return;
+      stageDashboardSnapshot = {
+        ...(stageDashboardSnapshot || {}),
+        weeklyKpis: kpiRes,
+        generatedAt: Date.now(),
+      };
+      loadWeeklyKpis();
+    });
   });
 }
 
-loadStats();
-loadOpenStages();
-loadAllStages();
-loadWeeklyKpis();
-loadStageBlockers();
-loadStageDataQuality();
+function refreshStageDashboardNow(options = {}) {
+  setRefreshBusy(true);
+  setSyncState(stageDashboardSnapshot, true);
+  chrome.runtime.sendMessage({ type: "REFRESH_STAGE_DASHBOARD" }, (res) => {
+    setRefreshBusy(false);
+    if (chrome.runtime.lastError) {
+      if (isUnknownMessageError(chrome.runtime.lastError.message)) {
+        loadLegacyDashboard({ silent: !!options.silent });
+        return;
+      }
+      if (!options.silent && statusEl) {
+        statusEl.textContent = `Erreur refresh: ${chrome.runtime.lastError.message}`;
+      }
+      return;
+    }
+    if (!res?.ok || !res?.snapshot) {
+      if (isUnknownMessageError(res)) {
+        loadLegacyDashboard({ silent: !!options.silent });
+        return;
+      }
+      if (!options.silent && statusEl) {
+        statusEl.textContent = `Erreur refresh: ${res?.error || "inconnue"}`;
+      }
+      return;
+    }
+    applyDashboardSnapshot(res.snapshot, { deferSecondary: true });
+  });
+}
+
+function queueDashboardRefresh(delayMs = 1000) {
+  if (dashboardFollowupTimer) {
+    clearTimeout(dashboardFollowupTimer);
+  }
+  dashboardFollowupTimer = setTimeout(() => {
+    dashboardFollowupTimer = null;
+    refreshStageDashboardNow({ silent: true });
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function loadStageDashboard(options = {}) {
+  const payload = {
+    force: !!options.force,
+    allowStale: options.allowStale !== false,
+  };
+  if (!stageDashboardSnapshot) {
+    if (statusEl) statusEl.textContent = "Chargement...";
+    if (allStatusEl) allStatusEl.textContent = "Chargement...";
+    if (openStatusEl) openStatusEl.textContent = "Chargement...";
+  }
+  setSyncState(stageDashboardSnapshot, true);
+  chrome.runtime.sendMessage({ type: "GET_STAGE_DASHBOARD", payload }, (res) => {
+    if (chrome.runtime.lastError) {
+      if (isUnknownMessageError(chrome.runtime.lastError.message)) {
+        loadLegacyDashboard({ silent: !!options.silent });
+        return;
+      }
+      const msg = `Erreur: ${chrome.runtime.lastError.message}`;
+      if (statusEl) statusEl.textContent = msg;
+      if (!stageDashboardSnapshot) {
+        renderOpenStages([]);
+        renderAllStages([]);
+      }
+      return;
+    }
+    if (!res?.ok || !res?.snapshot) {
+      if (isUnknownMessageError(res)) {
+        loadLegacyDashboard({ silent: !!options.silent });
+        return;
+      }
+      const msg = `Erreur: ${res?.error || "inconnue"}`;
+      if (statusEl) statusEl.textContent = msg;
+      if (!stageDashboardSnapshot) {
+        renderOpenStages([]);
+        renderAllStages([]);
+      }
+      return;
+    }
+    applyDashboardSnapshot(res.snapshot, { deferSecondary: true });
+    if (res.snapshot.stale) {
+      queueDashboardRefresh(1500);
+    }
+  });
+}
+
+loadStageDashboard({ allowStale: true });
 
 if (allSearchEl) {
-  allSearchEl.addEventListener("input", () => applyAllStagesFilter());
+  const onSearch = debounce(() => applyAllStagesFilter({ reset: true }), 120);
+  allSearchEl.addEventListener("input", onSearch);
+}
+
+if (stageRefreshBtn) {
+  stageRefreshBtn.addEventListener("click", () => {
+    refreshStageDashboardNow({ silent: false });
+  });
 }
 
 if (kanbanListTab && kanbanBoardTab && kanbanListView && kanbanBoardView) {

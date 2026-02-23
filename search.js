@@ -27,6 +27,40 @@ function clearResults() {
   resultsEl.innerHTML = "";
 }
 
+function openStageDetail(item) {
+  const detail = {
+    id: normalizeText(item.id || ""),
+    title: normalizeText(item.title || "Stage"),
+    company: normalizeText(item.company || ""),
+    type: normalizeText(item.typeValue || "Stage"),
+    status: normalizeText(item.status || ""),
+    closeDate: normalizeText(item.closeDate || ""),
+    location: normalizeText(item.location || ""),
+    role: normalizeText(item.role || ""),
+    openDate: normalizeText(item.openDate || ""),
+    applicationDate: normalizeText(item.applicationDate || ""),
+    startMonth: normalizeText(item.startMonth || ""),
+    url: normalizeText(item.url || item.link || ""),
+    notes: normalizeText(item.notes || ""),
+  };
+
+  const params = new URLSearchParams();
+  if (detail.id) params.set("id", detail.id);
+  params.set("title", detail.title);
+  params.set("status", detail.status);
+  params.set("deadline", detail.closeDate);
+  params.set("link", detail.url);
+  params.set("type", detail.type || "Stage");
+  params.set("notes", detail.notes);
+
+  chrome.storage.local.set(
+    { stageDetailId: detail.id, stageDetailFallback: detail },
+    () => {
+      window.open(`stage-detail.html?${params.toString()}`, "_blank", "noreferrer");
+    }
+  );
+}
+
 function renderResults(items) {
   clearResults();
   if (!items || items.length === 0) {
@@ -50,6 +84,18 @@ function renderResults(items) {
     tag.className = "tag";
     tag.textContent = item.typeLabel || item.type;
 
+    if (item.type === "notion") {
+      row.tabIndex = 0;
+      row.style.cursor = "pointer";
+      row.addEventListener("click", () => openStageDetail(item));
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openStageDetail(item);
+        }
+      });
+    }
+
     row.appendChild(tag);
     row.appendChild(title);
     if (meta.textContent) row.appendChild(meta);
@@ -60,6 +106,7 @@ function renderResults(items) {
       link.target = "_blank";
       link.rel = "noreferrer";
       link.textContent = item.linkLabel || "Ouvrir";
+      link.addEventListener("click", (e) => e.stopPropagation());
       row.appendChild(link);
     }
 
@@ -143,8 +190,20 @@ async function runSearch() {
         typeLabel: "Stage",
         title: normalizeText([row.company, row.title].filter(Boolean).join(" - ") || "Stage"),
         meta: normalizeText(row.status || ""),
+        id: row.id || "",
+        company: row.company || "",
+        status: row.status || "",
+        typeValue: row.type || "Stage",
+        closeDate: row.closeDate || "",
+        location: row.location || "",
+        role: row.role || "",
+        openDate: row.openDate || "",
+        applicationDate: row.applicationDate || "",
+        startMonth: row.startMonth || "",
+        url: row.url || "",
+        notes: row.notes || "",
         link: row.url || "",
-        linkLabel: "Ouvrir",
+        linkLabel: "Offre",
       });
     });
   }
