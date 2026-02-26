@@ -9,6 +9,7 @@ const prepReminderEl = document.getElementById("prep-reminder");
 const prepNotesEl = document.getElementById("prep-notes");
 const prepSaveBtn = document.getElementById("prep-save");
 const prepSetInterviewBtn = document.getElementById("prep-set-interview");
+const prepSetRecaleBtn = document.getElementById("prep-set-recale");
 const prepStatusEl = document.getElementById("prep-status");
 let currentStageId = "";
 let currentStageTitle = "";
@@ -242,6 +243,46 @@ if (prepSetInterviewBtn) {
       if (prepStatusEl) prepStatusEl.textContent = "Status entretien + todo crees.";
     } finally {
       prepSetInterviewBtn.disabled = false;
+      if (prepSaveBtn) prepSaveBtn.disabled = false;
+    }
+  });
+}
+
+if (prepSetRecaleBtn) {
+  prepSetRecaleBtn.addEventListener("click", async () => {
+    const stageId = resolveStageId();
+    if (!stageId) {
+      if (prepStatusEl) prepStatusEl.textContent = "Impossible sans ID.";
+      return;
+    }
+
+    if (prepStatusEl) prepStatusEl.textContent = "Mise a jour du status...";
+    prepSetRecaleBtn.disabled = true;
+    if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = true;
+    if (prepSaveBtn) prepSaveBtn.disabled = true;
+    try {
+      const statusRes = await sendMessageAsync({
+        type: "UPDATE_STAGE_STATUS",
+        payload: { id: stageId, status: "Refus\u00e9" },
+      });
+      if (!statusRes?.ok) {
+        if (prepStatusEl) prepStatusEl.textContent = `Erreur status: ${statusRes?.error || "inconnue"}`;
+        return;
+      }
+
+      const statusChipEl = document.getElementById("status");
+      if (statusChipEl) {
+        statusChipEl.textContent = normalizeText(statusRes.newStatus || "Refus\u00e9");
+      }
+      if (prepStatusEl) {
+        prepStatusEl.textContent =
+          statusRes?.rejectedQueue && !statusRes.rejectedQueue.ok
+            ? `Stage passe en refuse (queue KO: ${statusRes.rejectedQueue.error || "inconnue"}).`
+            : "Stage passe en refuse + ajoute a la queue.";
+      }
+    } finally {
+      prepSetRecaleBtn.disabled = false;
+      if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = false;
       if (prepSaveBtn) prepSaveBtn.disabled = false;
     }
   });

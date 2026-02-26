@@ -9,6 +9,7 @@ const todoStagesEl = document.getElementById("todo-stages");
 const todoStagesStatusEl = document.getElementById("todo-stages-status");
 const todoStagesCountEl = document.getElementById("todo-stages-count");
 const offlineStatusEl = document.getElementById("offline-status");
+const toastStackEl = document.getElementById("toast-stack");
 const navButtons = Array.from(document.querySelectorAll(".nav-btn"));
 
 let extracted = null;
@@ -17,6 +18,41 @@ function normalizeText(input) {
   const text = (input ?? "").toString();
   return text.normalize("NFC").trim();
 }
+
+function queueLabelFromPayload(payload) {
+  const company = normalizeText(payload?.company);
+  const title = normalizeText(payload?.title);
+  return `${title || "Poste inconnu"} - ${company || "Entreprise inconnue"}`;
+}
+
+function showToast(message, kind = "success") {
+  if (!toastStackEl) return;
+  const toast = document.createElement("div");
+  toast.className = `toast ${kind === "queue" ? "queue" : "success"}`;
+  toast.textContent = message;
+  toastStackEl.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("visible"));
+  window.setTimeout(() => {
+    toast.classList.remove("visible");
+    window.setTimeout(() => toast.remove(), 220);
+  }, 2800);
+}
+
+function handleNotionQueueEvent(msg) {
+  if (msg?.type !== "NOTION_QUEUE_EVENT") return;
+  const eventName = normalizeText(msg?.payload?.event || "");
+  const label = normalizeText(msg?.payload?.label || "Stage");
+  if (eventName !== "notion_saved") return;
+
+  const mode = normalizeText(msg?.payload?.mode || "created");
+  const prefix = mode === "updated" ? "Stage mis a jour dans Notion" : "Stage ajoute dans Notion";
+  showToast(`${prefix}: ${label}`, "success");
+  refreshOfflineStatus();
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  handleNotionQueueEvent(msg);
+});
 
 function formatPreview(data) {
   if (!data) return "";
@@ -184,7 +220,7 @@ addBtn.addEventListener("click", async () => {
     const ok = await extractFromPage();
     if (!ok) return;
   }
-  msg.textContent = "Envoi a Notion...";
+  msg.textContent = "Ajout a la queue Notion...";
 
   const payload = { ...extracted, applied: appliedCb.checked };
 
@@ -195,8 +231,8 @@ addBtn.addEventListener("click", async () => {
     }
 
     if (res?.ok) {
-      const label = res.mode === "queued" ? "en attente (offline)" : res.mode;
-      msg.textContent = `Ajoute / mis a jour (${label})`;
+      msg.textContent = "";
+      showToast(`Stage ajoute a la queue: ${queueLabelFromPayload(payload)}`, "queue");
     }
     else msg.textContent = `Erreur: ${res?.error || "inconnue"}`;
   });
@@ -359,7 +395,7 @@ function refreshOfflineStatus() {
       return;
     }
     offlineStatusEl.textContent = res.count
-      ? `${res.count} action(s) en attente (offline).`
+      ? `${res.count} action(s) en attente dans la queue Notion.`
       : "";
   });
 }

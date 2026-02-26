@@ -30,6 +30,10 @@ const DEADLINE_PREFS_KEY = "deadlinePrefs";
 const DEADLINE_ALARM_PREFIX = "deadline|";
 const INTERVIEW_ALARM_PREFIX = "interview|";
 const OFFLINE_QUEUE_KEY = "offlineQueue";
+const REJECTED_STAGE_QUEUE_KEY = "rejectedStageQueue";
+const NOTION_QUEUE_ALARM = "notion-upsert-queue";
+const NOTION_QUEUE_RETRY_BASE_MS = 15 * 1000;
+const NOTION_QUEUE_RETRY_MAX_MS = 15 * 60 * 1000;
 const YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const YAHOO_QUOTE_CACHE_MIN = 5;
 const ECB_FR10Y_URL =
@@ -58,6 +62,7 @@ const URL_BLOCKER_BASE_ID = 9000;
 
 let stageSnapshotInFlight = null;
 let stageSnapshotRefreshTimer = null;
+let notionQueueWorkerInFlight = null;
 
 try {
   if (chrome?.sidePanel?.setPanelBehavior) {
@@ -1512,7 +1517,17 @@ function parseDateFromText(value) {
 
 function isNetworkError(err) {
   const msg = String(err?.message || err || "");
-  return /failed to fetch|networkerror|fetch failed|net::/i.test(msg);
+  if (/failed to fetch|networkerror|fetch failed|net::/i.test(msg)) {
+    return true;
+  }
+  if (err?.code === "NETWORK_ERROR") {
+    return true;
+  }
+  const status = Number(err?.status);
+  if (Number.isFinite(status) && (status === 429 || status >= 500)) {
+    return true;
+  }
+  return false;
 }
 
 function getDefaultTagRules() {
@@ -1858,7 +1873,205 @@ async function findDuplicateStageBySmartMatch(token, dbId, payload, map) {
   return best;
 }
 
+function createNotionQueueId() {
+  const rnd = Math.random().toString(16).slice(2);
+  return `nq_${Date.now()}_${rnd}`;
+}
+
+function normalizeQueuedNotionItem(rawItem) {
+  if (!rawItem || typeof rawItem !== "object") return null;
+  const payload =
+    rawItem.payload && typeof rawItem.payload === "object" ? rawItem.payload : rawItem;
+  if (!payload || typeof payload !== "object") return null;
+  const attempts = Number.isFinite(rawItem.attempts) ? Math.max(0, rawItem.attempts) : 0;
+  const nextAttemptAt = Number.isFinite(rawItem.nextAttemptAt)
+    ? Math.max(0, rawItem.nextAttemptAt)
+    : 0;
+  return {
+    id: rawItem.id || createNotionQueueId(),
+    payload,
+    createdAt: Number.isFinite(rawItem.createdAt) ? rawItem.createdAt : Date.now(),
+    attempts,
+    nextAttemptAt,
+    lastError: normalizeText(rawItem.lastError || ""),
+  };
+}
+
+async function enqueueNotionUpsert(payload) {
+  const normalized = normalizeQueuedNotionItem({ payload, createdAt: Date.now(), attempts: 0 });
+  if (!normalized) throw new Error("Payload stage invalide.");
+  const { [OFFLINE_QUEUE_KEY]: queue } = await chrome.storage.local.get([OFFLINE_QUEUE_KEY]);
+  const next = Array.isArray(queue) ? queue.slice() : [];
+  next.push(normalized);
+  await chrome.storage.local.set({ [OFFLINE_QUEUE_KEY]: next });
+  return next.length;
+}
+
+async function enqueueRejectedStage(payload) {
+  const stageId = normalizeText(payload?.id || payload?.stageId || "");
+  if (!stageId) throw new Error("Stage ID manquant.");
+
+  const company = normalizeText(payload?.company || "");
+  const title = normalizeText(payload?.title || "");
+  const status = normalizeText(payload?.status || "Refus\u00e9");
+  const url = normalizeText(payload?.url || "");
+  const source = normalizeText(payload?.source || "stage-detail");
+  const label = [company, title].filter(Boolean).join(" - ") || title || company || "Stage";
+
+  const { [REJECTED_STAGE_QUEUE_KEY]: queue } = await chrome.storage.local.get([
+    REJECTED_STAGE_QUEUE_KEY,
+  ]);
+  const next = Array.isArray(queue) ? queue.slice() : [];
+  next.push({
+    id: createNotionQueueId(),
+    stageId,
+    company,
+    title,
+    status,
+    url,
+    source,
+    label,
+    queuedAt: Date.now(),
+  });
+  await chrome.storage.local.set({ [REJECTED_STAGE_QUEUE_KEY]: next });
+
+  notifyUser("Stage refuse", `${label} ajoute a la queue.`, "stage-refuse");
+  return { ok: true, count: next.length, label };
+}
+
+async function updateNotionQueueHead(mode, replacement) {
+  const { [OFFLINE_QUEUE_KEY]: queue } = await chrome.storage.local.get([OFFLINE_QUEUE_KEY]);
+  const next = Array.isArray(queue) ? queue.slice() : [];
+  if (!next.length) {
+    return 0;
+  }
+  if (mode === "shift") {
+    next.shift();
+  } else if (mode === "replace") {
+    next[0] = replacement;
+  }
+  await chrome.storage.local.set({ [OFFLINE_QUEUE_KEY]: next });
+  return next.length;
+}
+
+function computeNotionRetryDelayMs(attempts) {
+  const safeAttempts = Math.max(1, Number.isFinite(attempts) ? attempts : 1);
+  const exp = Math.min(7, safeAttempts - 1);
+  const delay = NOTION_QUEUE_RETRY_BASE_MS * 2 ** exp;
+  return Math.min(NOTION_QUEUE_RETRY_MAX_MS, delay);
+}
+
+function triggerNotionQueueWorker() {
+  processNotionQueue().catch((err) => {
+    handleError(err, "Queue Notion - traitement", null, { syncName: "offlineQueue" });
+  });
+}
+
+function broadcastNotionQueueEvent(eventName, payload, extra = {}) {
+  const company = normalizeText(payload?.company || "");
+  const title = normalizeText(payload?.title || "");
+  const fallback = normalizeText(payload?.url || "");
+  const label = [company, title].filter(Boolean).join(" - ") || fallback || "Stage";
+  const message = {
+    type: "NOTION_QUEUE_EVENT",
+    payload: {
+      event: eventName,
+      company,
+      title,
+      label,
+      at: Date.now(),
+      ...extra,
+    },
+  };
+  try {
+    chrome.runtime.sendMessage(message, () => {
+      void chrome.runtime?.lastError;
+    });
+  } catch (_) {
+    // No active extension page listening.
+  }
+}
+
+async function processNotionQueue() {
+  if (notionQueueWorkerInFlight) return notionQueueWorkerInFlight;
+
+  notionQueueWorkerInFlight = (async () => {
+    while (true) {
+      const { [OFFLINE_QUEUE_KEY]: queue } = await chrome.storage.local.get([OFFLINE_QUEUE_KEY]);
+      const items = Array.isArray(queue) ? queue : [];
+      if (!items.length) {
+        return;
+      }
+
+      const item = normalizeQueuedNotionItem(items[0]);
+      if (!item) {
+        await updateNotionQueueHead("shift");
+        continue;
+      }
+
+      if (item.nextAttemptAt && item.nextAttemptAt > Date.now()) {
+        return;
+      }
+
+      try {
+        const saved = await upsertToNotionNow(item.payload);
+        broadcastNotionQueueEvent("notion_saved", item.payload, {
+          mode: normalizeText(saved?.mode || "created"),
+        });
+        await updateNotionQueueHead("shift");
+      } catch (err) {
+        if (isNetworkError(err)) {
+          const nextAttempts = item.attempts + 1;
+          const waitMs = computeNotionRetryDelayMs(nextAttempts);
+          const retryItem = {
+            ...item,
+            attempts: nextAttempts,
+            nextAttemptAt: Date.now() + waitMs,
+            lastError: String(err?.message || err || ""),
+          };
+          await updateNotionQueueHead("replace", retryItem);
+          await handleError(err, "Queue Notion - retry en attente", null, {
+            syncName: "offlineQueue",
+          });
+          return;
+        }
+
+        await updateNotionQueueHead("shift");
+        await handleError(err, "Queue Notion - element ignore", null, {
+          syncName: "offlineQueue",
+        });
+      }
+    }
+  })();
+
+  try {
+    await notionQueueWorkerInFlight;
+  } finally {
+    notionQueueWorkerInFlight = null;
+  }
+}
+
 async function upsertToNotion(payload) {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const queueCount = await enqueueNotionUpsert(payload);
+  triggerNotionQueueWorker();
+  return {
+    ok: true,
+    mode: "queued",
+    queueCount,
+  };
+}
+
+async function upsertToNotionNow(payload) {
   const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
     "notionToken",
     "notionDbId",
@@ -1877,37 +2090,25 @@ async function upsertToNotion(payload) {
   const map = notionFieldMap || {};
   const statusMap = notionStatusMap || {};
 
-  try {
-    let existing = await findByUrl(token, normalizedDbId, payload.url, map);
-    if (!existing) {
-      existing = await findDuplicateStageBySmartMatch(token, normalizedDbId, payload, map);
-    }
-    const properties = buildProps(payload, map, statusMap);
-
-    if (existing) {
-      await notionFetch(token, `pages/${existing.id}`, "PATCH", { properties });
-      await invalidateStageSnapshot();
-      scheduleStageSnapshotRefresh(150);
-      return { ok: true, mode: "updated" };
-    } else {
-      await notionFetch(token, "pages", "POST", {
-        parent: { database_id: normalizedDbId },
-        properties,
-      });
-      await invalidateStageSnapshot();
-      scheduleStageSnapshotRefresh(150);
-      return { ok: true, mode: "created" };
-    }
-  } catch (e) {
-    if (!isNetworkError(e)) {
-      throw e;
-    }
-    const { [OFFLINE_QUEUE_KEY]: queue } = await chrome.storage.local.get([OFFLINE_QUEUE_KEY]);
-    const next = Array.isArray(queue) ? queue : [];
-    next.push({ payload, createdAt: Date.now() });
-    await chrome.storage.local.set({ [OFFLINE_QUEUE_KEY]: next });
-    return { ok: true, mode: "queued" };
+  let existing = await findByUrl(token, normalizedDbId, payload.url, map);
+  if (!existing) {
+    existing = await findDuplicateStageBySmartMatch(token, normalizedDbId, payload, map);
   }
+  const properties = buildProps(payload, map, statusMap);
+
+  if (existing) {
+    await notionFetch(token, `pages/${existing.id}`, "PATCH", { properties });
+    await invalidateStageSnapshot();
+    scheduleStageSnapshotRefresh(150);
+    return { ok: true, mode: "updated" };
+  }
+  await notionFetch(token, "pages", "POST", {
+    parent: { database_id: normalizedDbId },
+    properties,
+  });
+  await invalidateStageSnapshot();
+  scheduleStageSnapshotRefresh(150);
+  return { ok: true, mode: "created" };
 }
 
 function propText(prop) {
@@ -2457,16 +2658,46 @@ async function updateStageStatus(payload) {
   const props = page.properties || {};
   const previousRaw = propText(props[statusKey]) || "";
 
+  const statusNorm = statusRaw.toLowerCase();
+  const defaultOpen = "Ouvert";
+  const defaultRejected = "Refus\u00e9";
+  const defaultApplied = "Candidature envoyee";
+  const defaultInterview = "Entretien";
+
+  let preferredStatus = statusRaw;
+  let fallbackStatuses = [];
+  if (statusNorm.startsWith("ouv")) {
+    preferredStatus = statusMap.open || defaultOpen;
+    fallbackStatuses = [defaultOpen, "Open"];
+  } else if (statusNorm.includes("refus") || statusNorm.includes("recal")) {
+    preferredStatus = statusMap.rejected || defaultRejected;
+    fallbackStatuses = [
+      defaultRejected,
+      "Refuse",
+      "Refusee",
+      "Refus?",
+      "Recale",
+      "Recal\u00e9",
+      "Refused",
+    ];
+  } else if (statusNorm.includes("candid")) {
+    preferredStatus = statusMap.applied || defaultApplied;
+    fallbackStatuses = [
+      defaultApplied,
+      "Candidature envoy\u00e9e",
+      "Postule",
+      "Postul\u00e9",
+      "Applied",
+    ];
+  } else if (statusNorm.includes("entre")) {
+    preferredStatus = statusMap.interview || defaultInterview;
+    fallbackStatuses = [defaultInterview, "Interview"];
+  }
+
   const value =
-    statusRaw.toLowerCase().startsWith("ouv")
-      ? statusMap.open || "Ouvert"
-      : statusRaw.toLowerCase().includes("refus") || statusRaw.toLowerCase().includes("recal")
-        ? statusMap.rejected || "Refus?"
-        : statusRaw.toLowerCase().includes("candid")
-        ? statusMap.applied || "Candidature envoyee"
-        : statusRaw.toLowerCase().includes("entre")
-          ? statusMap.interview || "Entretien"
-          : statusRaw;
+    statusProp.type === "status" || statusProp.type === "select"
+      ? resolveTodoStatusName(statusProp, preferredStatus, fallbackStatuses)
+      : preferredStatus;
 
   let propPayload = null;
   if (statusProp.type === "status") {
@@ -2496,10 +2727,44 @@ async function updateStageStatus(payload) {
   await notionFetch(token, `pages/${pageId}`, "PATCH", { properties: propPayload });
 
   const nextKind = normalizeStageStatusForAutomation(value);
+  let rejectedQueue = null;
+  if (nextKind === "refuse") {
+    const jobTitleKey = map.jobTitle || "Job Title";
+    const companyKey = map.company || "Entreprise";
+    const urlKey = map.url || "lien offre";
+    try {
+      const queueRes = await enqueueRejectedStage({
+        id: pageId,
+        title: propText(props[jobTitleKey]) || propText(props["Name"]) || "",
+        company: propText(props[companyKey]) || "",
+        url: propText(props[urlKey]) || "",
+        status: value,
+        source: "status-update",
+      });
+      rejectedQueue = { ok: true, count: Number(queueRes?.count || 0) };
+    } catch (queueErr) {
+      await handleError(
+        queueErr,
+        "Queue - stage refuse auto",
+        { id: pageId },
+        { syncName: "rejectedStageQueue" }
+      );
+      rejectedQueue = {
+        ok: false,
+        error: String(queueErr?.message || queueErr || "inconnue"),
+      };
+    }
+  }
 
   await invalidateStageSnapshot();
   scheduleStageSnapshotRefresh(150);
-  return { ok: true, previousStatus: previousRaw, newStatus: value, statusKind: nextKind };
+  return {
+    ok: true,
+    previousStatus: previousRaw,
+    newStatus: value,
+    statusKind: nextKind,
+    rejectedQueue,
+  };
 }
 
 async function deleteStage(payload) {
@@ -2534,7 +2799,20 @@ function normalizeStatus(value) {
   return normalizeText(value || "").toLowerCase();
 }
 
+function isRejectedStatus(norm) {
+  const value = normalizeStatus(norm);
+  return (
+    value === "recal?" ||
+    value === "recale" ||
+    value.includes("refus") ||
+    value.includes("recal") ||
+    value.includes("reject") ||
+    value.includes("rejet")
+  );
+}
+
 function isAppliedStatus(norm) {
+  if (isRejectedStatus(norm)) return false;
   return (
     norm === "candidature envoy?e" ||
     norm === "candidature envoyee" ||
@@ -2601,7 +2879,7 @@ async function getStageStatusStats() {
       appliedCount += count;
       return;
     }
-    if (norm === "recal?" || norm === "recale") {
+    if (isRejectedStatus(norm)) {
       recaleCount += count;
       return;
     }
@@ -2856,7 +3134,7 @@ function buildStageStatsFromItems(items) {
       appliedCount += count;
       return;
     }
-    if (norm === "recal?" || norm === "recale") {
+    if (isRejectedStatus(norm)) {
       recaleCount += count;
       return;
     }
@@ -3731,6 +4009,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     );
   }
 
+  if (msg?.type === "ENQUEUE_REJECTED_STAGE") {
+    return respondWith(
+      enqueueRejectedStage(msg?.payload),
+      sendResponse,
+      "Queue - stage refuse",
+      {
+        syncName: "rejectedStageQueue",
+        meta: { id: msg?.payload?.id || msg?.payload?.stageId || null },
+      }
+    );
+  }
+
   if (msg?.type === "DELETE_STAGE") {
     return respondWith(
       deleteStage(msg?.payload),
@@ -4118,6 +4408,50 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg?.type === "OFFLINE_QUEUE_DETAILS") {
+    chrome.storage.local.get([OFFLINE_QUEUE_KEY], (data) => {
+      const now = Date.now();
+      const rawItems = Array.isArray(data[OFFLINE_QUEUE_KEY]) ? data[OFFLINE_QUEUE_KEY] : [];
+      const items = rawItems
+        .map((entry) => normalizeQueuedNotionItem(entry))
+        .filter(Boolean)
+        .map((entry, index) => {
+          const payload = entry.payload || {};
+          const company = normalizeText(payload.company || "");
+          const title = normalizeText(payload.title || "");
+          const fallback = normalizeText(payload.url || "");
+          const label = [company, title].filter(Boolean).join(" - ") || fallback || "Stage";
+          const waitMs = entry.nextAttemptAt ? Math.max(0, entry.nextAttemptAt - now) : 0;
+          const state =
+            waitMs > 0
+              ? "retry_wait"
+              : index === 0 && !!notionQueueWorkerInFlight
+                ? "uploading"
+                : "queued";
+
+          return {
+            id: entry.id,
+            label,
+            company,
+            title,
+            attempts: entry.attempts || 0,
+            waitMs,
+            state,
+            nextAttemptAt: entry.nextAttemptAt || 0,
+            lastError: entry.lastError || "",
+          };
+        });
+
+      sendResponse({
+        ok: true,
+        count: items.length,
+        processing: !!notionQueueWorkerInFlight,
+        items,
+      });
+    });
+    return true;
+  }
+
   if (msg?.type === "GCAL_GET_NOTIFY_PREFS") {
     chrome.storage.local.get([GCAL_NOTIFY_TOGGLE_KEY], (data) => {
       sendResponse({ ok: true, ids: data[GCAL_NOTIFY_TOGGLE_KEY] || [] });
@@ -4341,6 +4675,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
     return;
   }
+  if (alarm.name === NOTION_QUEUE_ALARM) {
+    try {
+      await processNotionQueue();
+    } catch (err) {
+      await handleError(err, "Alarme Queue Notion", null, { syncName: "offlineQueue" });
+    }
+    return;
+  }
   if (alarm.name.startsWith(GCAL_SNOOZE_ALARM_PREFIX)) {
     chrome.storage.local.get([alarm.name], (data) => {
       const info = data[alarm.name];
@@ -4448,22 +4790,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 async function flushOfflineQueue() {
-  const { [OFFLINE_QUEUE_KEY]: queue } = await chrome.storage.local.get([OFFLINE_QUEUE_KEY]);
-  const items = Array.isArray(queue) ? queue : [];
-  if (!items.length) return;
-
-  const remaining = [];
-  for (const item of items) {
-    try {
-      await upsertToNotion(item.payload);
-    } catch (err) {
-      await handleError(err, "Flush file d'attente offline", null, {
-        syncName: "offlineQueue",
-      });
-      remaining.push(item);
-    }
-  }
-  await chrome.storage.local.set({ [OFFLINE_QUEUE_KEY]: remaining });
+  await processNotionQueue();
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -4471,9 +4798,10 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
+  chrome.alarms.create(NOTION_QUEUE_ALARM, { periodInMinutes: 1 });
   chrome.alarms.create(STAGE_DATA_SYNC_ALARM, { periodInMinutes: 2 });
   chrome.alarms.create(STAGE_SLA_ALARM, { periodInMinutes: 720 });
-  flushOfflineQueue();
+  flushOfflineQueue().catch(() => {});
   scheduleStageSnapshotRefresh(3000);
   ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
 });
@@ -4544,9 +4872,10 @@ chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
+  chrome.alarms.create(NOTION_QUEUE_ALARM, { periodInMinutes: 1 });
   chrome.alarms.create(STAGE_DATA_SYNC_ALARM, { periodInMinutes: 2 });
   chrome.alarms.create(STAGE_SLA_ALARM, { periodInMinutes: 720 });
-  flushOfflineQueue();
+  flushOfflineQueue().catch(() => {});
   scheduleStageSnapshotRefresh(3000);
   ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
 });

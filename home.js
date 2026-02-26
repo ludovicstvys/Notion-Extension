@@ -5,6 +5,9 @@ const newsEl = document.getElementById("home-news");
 const addBtn = document.getElementById("home-add");
 const appliedCb = document.getElementById("home-applied");
 const addStatusEl = document.getElementById("home-add-status");
+const queueStatusEl = document.getElementById("home-queue-status");
+const queueListEl = document.getElementById("home-queue-list");
+const queueCountEl = document.getElementById("home-queue-count");
 const marketsStatusEl = document.getElementById("markets-status");
 const marketsListEl = document.getElementById("markets-list");
 const todoNotionStatusEl = document.getElementById("todo-notion-status");
@@ -15,6 +18,7 @@ const todoNotesEl = document.getElementById("todo-notes");
 const todoAddBtn = document.getElementById("todo-add");
 const todoToggleBtn = document.getElementById("todo-toggle");
 const todoFormEl = document.querySelector(".todo-form");
+const toastStackEl = document.getElementById("toast-stack");
 const pomodoroTimerEl = document.getElementById("pomodoro-timer");
 const pomodoroStartBtn = document.getElementById("pomodoro-start");
 const pomodoroPauseBtn = document.getElementById("pomodoro-pause");
@@ -22,6 +26,7 @@ const pomodoroResumeBtn = document.getElementById("pomodoro-resume");
 const pomodoroResetBtn = document.getElementById("pomodoro-reset");
 const widgetSections = Array.from(document.querySelectorAll("[data-widget]"));
 let extracted = null;
+let notionQueueInterval = null;
 let pomodoroInterval = null;
 let pomodoroMode = "work";
 let pomodoroRemaining = 25 * 60;
@@ -31,6 +36,123 @@ let pomodoroBreakMinutes = 5;
 function normalizeText(input) {
   const text = (input ?? "").toString();
   return text.normalize("NFC").trim();
+}
+
+function queueLabelFromPayload(payload) {
+  const company = normalizeText(payload?.company);
+  const title = normalizeText(payload?.title);
+  return `${title || "Poste inconnu"} - ${company || "Entreprise inconnue"}`;
+}
+
+function showToast(message, kind = "success") {
+  if (!toastStackEl) return;
+  const toast = document.createElement("div");
+  toast.className = `toast ${kind === "queue" ? "queue" : "success"}`;
+  toast.textContent = message;
+  toastStackEl.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("visible"));
+  window.setTimeout(() => {
+    toast.classList.remove("visible");
+    window.setTimeout(() => toast.remove(), 220);
+  }, 2800);
+}
+
+function handleNotionQueueEvent(msg) {
+  if (msg?.type !== "NOTION_QUEUE_EVENT") return;
+  const eventName = normalizeText(msg?.payload?.event || "");
+  const label = normalizeText(msg?.payload?.label || "Stage");
+  if (eventName !== "notion_saved") return;
+
+  const mode = normalizeText(msg?.payload?.mode || "created");
+  const prefix = mode === "updated" ? "Stage mis a jour dans Notion" : "Stage ajoute dans Notion";
+  showToast(`${prefix}: ${label}`, "success");
+  loadNotionQueue();
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  handleNotionQueueEvent(msg);
+});
+
+function formatQueueDelay(waitMs) {
+  const totalSec = Math.max(0, Math.ceil(Number(waitMs || 0) / 1000));
+  if (totalSec < 60) return `${totalSec}s`;
+  const totalMin = Math.ceil(totalSec / 60);
+  return `${totalMin}min`;
+}
+
+function renderNotionQueue(items, processing) {
+  if (!queueStatusEl || !queueListEl || !queueCountEl) return;
+
+  const list = Array.isArray(items) ? items : [];
+  queueCountEl.textContent = `${list.length}`;
+  queueListEl.innerHTML = "";
+
+  if (!list.length) {
+    queueStatusEl.textContent = processing ? "Upload en cours..." : "Aucun stage en attente.";
+    const empty = document.createElement("div");
+    empty.className = "queue-item";
+    const title = document.createElement("div");
+    title.className = "queue-item-title";
+    title.textContent = "Queue vide";
+    empty.appendChild(title);
+    queueListEl.appendChild(empty);
+    return;
+  }
+
+  queueStatusEl.textContent = processing
+    ? `${list.length} stage(s) en queue (upload en cours).`
+    : `${list.length} stage(s) en queue.`;
+
+  list.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "queue-item";
+
+    const title = document.createElement("div");
+    title.className = "queue-item-title";
+    title.textContent = normalizeText(item?.label || "Stage");
+
+    const meta = document.createElement("div");
+    meta.className = "queue-item-meta";
+
+    let state = "En attente";
+    if (item?.state === "retry_wait") {
+      state = `Retry dans ${formatQueueDelay(item.waitMs)}`;
+    } else if (item?.state === "uploading" || (index === 0 && processing)) {
+      state = "Upload en cours";
+    }
+    const parts = [state];
+    if (Number(item?.attempts || 0) > 0) {
+      parts.push(`retry: ${Number(item.attempts)}`);
+    }
+    meta.textContent = parts.join(" - ");
+
+    row.appendChild(title);
+    row.appendChild(meta);
+    queueListEl.appendChild(row);
+  });
+}
+
+function loadNotionQueue() {
+  if (!queueStatusEl || !queueListEl || !queueCountEl) return;
+  chrome.runtime.sendMessage({ type: "OFFLINE_QUEUE_DETAILS" }, (res) => {
+    if (chrome.runtime.lastError) {
+      queueStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
+      return;
+    }
+    if (!res?.ok) {
+      queueStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+      return;
+    }
+    renderNotionQueue(res.items || [], !!res.processing);
+  });
+}
+
+function startNotionQueueRefresh() {
+  loadNotionQueue();
+  if (notionQueueInterval) {
+    clearInterval(notionQueueInterval);
+  }
+  notionQueueInterval = setInterval(loadNotionQueue, 3000);
 }
 
 function formatEventTime(ev) {
@@ -245,7 +367,7 @@ if (addBtn) {
   addBtn.addEventListener("click", async () => {
     const ok = await extractFromPage();
     if (!ok || !extracted) return;
-    if (addStatusEl) addStatusEl.textContent = "Envoi a Notion...";
+    if (addStatusEl) addStatusEl.textContent = "Ajout a la queue Notion...";
 
     const payload = { ...extracted, applied: !!appliedCb?.checked };
     chrome.runtime.sendMessage({ type: "UPSERT_NOTION", payload }, (res) => {
@@ -257,8 +379,9 @@ if (addBtn) {
       }
 
       if (res?.ok) {
-        const label = res.mode === "queued" ? "en attente (offline)" : res.mode;
-        if (addStatusEl) addStatusEl.textContent = `Ajoute / mis a jour (${label})`;
+        if (addStatusEl) addStatusEl.textContent = "";
+        showToast(`Stage ajoute a la queue: ${queueLabelFromPayload(payload)}`, "queue");
+        loadNotionQueue();
       } else if (addStatusEl) {
         addStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
       }
@@ -693,6 +816,14 @@ loadEvents();
 loadNews();
 loadMarketsList();
 loadNotionTodos();
+startNotionQueueRefresh();
+
+window.addEventListener("beforeunload", () => {
+  if (notionQueueInterval) {
+    clearInterval(notionQueueInterval);
+    notionQueueInterval = null;
+  }
+});
 
 
 

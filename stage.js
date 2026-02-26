@@ -22,6 +22,7 @@ const stageRefreshBtn = document.getElementById("stage-refresh-btn");
 let stats = null;
 let segments = [];
 let allStages = [];
+let stageSearchIndex = [];
 let kanbanStatus = "Ouvert";
 let stageDashboardSnapshot = null;
 let filteredStages = [];
@@ -50,10 +51,19 @@ function normalizeText(input) {
   return text.normalize("NFC").trim();
 }
 
+function isRejectedStatusNorm(norm) {
+  return (
+    norm.includes("refus") ||
+    norm.includes("recal") ||
+    norm.includes("reject") ||
+    norm.includes("rejet")
+  );
+}
+
 function normalizeStatus(value) {
   const v = normalizeText(value).toLowerCase();
   if (v === "ouvert") return "ouvert";
-  if (v.includes("refus") || v.includes("recal")) return "refuse";
+  if (isRejectedStatusNorm(v)) return "refuse";
   if (v.includes("entretien") || v.includes("interview")) return "entretien";
   if (v.includes("candidature") || v.includes("postul") || v.includes("envoy")) return "candidature";
   return "candidature";
@@ -65,7 +75,7 @@ function isOpenStageStatus(value) {
 
 function isAppliedStageStatus(value) {
   const norm = normalizeText(value).toLowerCase();
-  if (norm.includes("refus") || norm.includes("recal")) return false;
+  if (isRejectedStatusNorm(norm)) return false;
   return (
     norm === "candidature envoy?e" ||
     norm === "candidature envoyee" ||
@@ -96,7 +106,7 @@ function computeStatsFromItems(items) {
       open += count;
       return;
     }
-    if (norm === "recal?" || norm === "recale" || norm.includes("refus") || norm.includes("recal")) {
+    if (norm === "recal?" || norm === "recale" || isRejectedStatusNorm(norm)) {
       recale += count;
       return;
     }
@@ -126,6 +136,25 @@ function debounce(fn, waitMs = 120) {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => fn(...args), waitMs);
   };
+}
+
+function buildStageSearchKey(item) {
+  return normalizeText(
+    [
+      item?.company || "",
+      item?.title || "",
+      item?.status || "",
+      item?.closeDate || "",
+      item?.url || "",
+    ].join(" ")
+  ).toLowerCase();
+}
+
+function rebuildStageSearchIndex() {
+  stageSearchIndex = (allStages || []).map((item) => ({
+    item,
+    searchKey: buildStageSearchKey(item),
+  }));
 }
 
 function setSyncState(snapshot, loading = false) {
@@ -217,6 +246,7 @@ function loadWeeklyKpis() {
 }
 
 function makeKanbanQuickActions(item, colKey) {
+  if (colKey === "refuse") return null;
   const wrap = document.createElement("div");
   wrap.className = "kanban-actions";
   const transitions = [
@@ -250,7 +280,7 @@ function buildSegments(data) {
     { key: "open", label: "Ouvert", count: open, color: "#0a84ff" },
     { key: "applied", label: "Candidatures envoyees", count: applied, color: "#34c759" },
     { key: "other", label: "Autres", count: other, color: "#8e8e93" },
-    { key: "recale", label: "Recale", count: recale, color: "#ff453a" },
+    { key: "recale", label: "Refus\u00e9", count: recale, color: "#ff453a" },
   ].filter((s) => s.count > 0);
 
   if (list.length === 0 && total === 0) {
@@ -448,7 +478,8 @@ function renderKanban() {
       role.className = "kanban-role";
       role.textContent = normalizeText(item.title && item.company ? item.title : "Stage");
       card.appendChild(role);
-      card.appendChild(makeKanbanQuickActions(item, col.key));
+      const quickActionsEl = makeKanbanQuickActions(item, col.key);
+      if (quickActionsEl) card.appendChild(quickActionsEl);
 
       card.addEventListener("dragstart", (e) => {
         card.classList.add("dragging");
@@ -507,6 +538,10 @@ function updateStageStatus(id, status) {
       if (res?.ok) {
         if (kanbanStatusEl) kanbanStatusEl.textContent = "";
         item.status = status;
+        if (res?.rejectedQueue && !res.rejectedQueue.ok && kanbanStatusEl) {
+          kanbanStatusEl.textContent = `Status OK, queue KO: ${res.rejectedQueue.error || "inconnue"}`;
+        }
+        rebuildStageSearchIndex();
         renderKanban();
         applyAllStagesFilter({ reset: false });
         stageDashboardSnapshot = {
@@ -553,6 +588,7 @@ function deleteStage(id, label) {
         return;
       }
       allStages = allStages.filter((stage) => stage.id !== stageId);
+      rebuildStageSearchIndex();
       applyAllStagesFilter({ reset: false });
       renderKanban();
       stageDashboardSnapshot = {
@@ -766,19 +802,13 @@ function applyAllStagesFilter(options = {}) {
     renderAllStages(filteredStages);
     return;
   }
-  filteredStages = allStages.filter((item) => {
-    const hay = [
-      item.company,
-      item.title,
-      item.status,
-      item.closeDate,
-      item.url,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    return hay.includes(query);
-  });
+  const matches = [];
+  for (let i = 0; i < stageSearchIndex.length; i += 1) {
+    const entry = stageSearchIndex[i];
+    if (!entry.searchKey.includes(query)) continue;
+    matches.push(entry.item);
+  }
+  filteredStages = matches;
   renderAllStages(filteredStages);
 }
 
@@ -790,6 +820,7 @@ function loadAllStages() {
 function applyDashboardSnapshot(snapshot, options = {}) {
   stageDashboardSnapshot = snapshot || null;
   allStages = Array.isArray(snapshot?.allStages) ? snapshot.allStages.slice() : [];
+  rebuildStageSearchIndex();
   loadStats();
   loadOpenStages();
   loadAllStages();

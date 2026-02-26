@@ -112,6 +112,14 @@
         font-weight: 600;
         cursor: pointer;
       }
+      .btn-danger {
+        border-color: rgba(248, 113, 113, 0.45);
+        background: rgba(239, 68, 68, 0.2);
+      }
+      .btn-danger:hover {
+        border-color: rgba(248, 113, 113, 0.75);
+        background: rgba(239, 68, 68, 0.3);
+      }
       .btn:disabled {
         opacity: 0.5;
         cursor: not-allowed;
@@ -198,6 +206,9 @@
           <button id="prep-save" class="btn" type="button">Sauver</button>
           <button id="prep-set-interview" class="btn" type="button">
             Passer en entretien + todo
+          </button>
+          <button id="prep-set-recale" class="btn btn-danger" type="button">
+            Passer en refus&eacute;
           </button>
           <div id="prep-status" class="note-status"></div>
         </div>

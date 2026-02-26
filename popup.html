@@ -168,10 +168,45 @@
       .stage-list li:last-child { border-bottom: 0; }
       .stage-list a { text-decoration: none; color: var(--text); }
       .stage-list a:hover { color: var(--accent); }
+      .toast-stack {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        display: grid;
+        gap: 8px;
+        width: min(300px, calc(100vw - 24px));
+        z-index: 9999;
+        pointer-events: none;
+      }
+      .toast {
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        box-shadow: 0 12px 26px rgba(2, 6, 23, 0.45);
+        opacity: 0;
+        transform: translateY(-8px);
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+      .toast.success {
+        border: 1px solid rgba(74, 222, 128, 0.45);
+        background: linear-gradient(135deg, rgba(22, 163, 74, 0.95), rgba(74, 222, 128, 0.92));
+        color: #052e16;
+      }
+      .toast.queue {
+        border: 1px solid rgba(250, 204, 21, 0.55);
+        background: linear-gradient(135deg, rgba(250, 204, 21, 0.95), rgba(253, 224, 71, 0.9));
+        color: #422006;
+      }
+      .toast.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
       a { color: inherit; }
     </style>
   </head>
   <body>
+    <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
     <div class="shell">
       <header>
         <h3 class="title">Stage - Notion</h3>

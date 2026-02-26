@@ -3,8 +3,11 @@ const statusEl = document.getElementById("status");
 const resultsEl = document.getElementById("results");
 const filters = Array.from(document.querySelectorAll(".filter"));
 
+const SEARCH_DEBOUNCE_MS = 120;
+
 let activeFilter = "all";
 let debounceId = null;
+let searchRunId = 0;
 let cache = {
   calendar: null,
   notion: null,
@@ -16,6 +19,10 @@ function normalizeText(input) {
   return text.normalize("NFC").trim();
 }
 
+function normalizeForSearch(input) {
+  return normalizeText(input).toLowerCase();
+}
+
 function formatDate(value) {
   if (!value) return "";
   const d = new Date(value);
@@ -24,7 +31,20 @@ function formatDate(value) {
 }
 
 function clearResults() {
+  if (!resultsEl) return;
   resultsEl.innerHTML = "";
+}
+
+function sendMessageAsync(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (res) => {
+      if (chrome.runtime.lastError) {
+        resolve({ ok: false, error: chrome.runtime.lastError.message || "Erreur extension." });
+        return;
+      }
+      resolve(res || { ok: false, error: "Aucune reponse." });
+    });
+  });
 }
 
 function openStageDetail(item) {
@@ -63,11 +83,15 @@ function openStageDetail(item) {
 
 function renderResults(items) {
   clearResults();
+  if (!statusEl) return;
   if (!items || items.length === 0) {
     statusEl.textContent = "Aucun resultat.";
     return;
   }
   statusEl.textContent = `${items.length} resultat(s)`;
+  if (!resultsEl) return;
+
+  const fragment = document.createDocumentFragment();
   items.forEach((item) => {
     const row = document.createElement("div");
     row.className = "result";
@@ -110,12 +134,81 @@ function renderResults(items) {
       row.appendChild(link);
     }
 
-    resultsEl.appendChild(row);
+    fragment.appendChild(row);
   });
+  resultsEl.appendChild(fragment);
 }
 
-function matchQuery(text, query) {
-  return normalizeText(text).toLowerCase().includes(query);
+function matchQuery(searchKey, query) {
+  return searchKey.includes(query);
+}
+
+function mapCalendarResult(ev) {
+  return {
+    type: "calendar",
+    typeLabel: "Calendrier",
+    title: normalizeText(ev.summary || "Evenement"),
+    meta: `${formatDate(ev.start)} - ${normalizeText(ev.calendarSummary || "")}`,
+    link: ev.htmlLink || ev.meetingLink || "",
+    linkLabel: ev.meetingLink ? "Rejoindre" : "Ouvrir",
+  };
+}
+
+function mapNotionResult(row) {
+  return {
+    type: "notion",
+    typeLabel: "Stage",
+    title: normalizeText([row.company, row.title].filter(Boolean).join(" - ") || "Stage"),
+    meta: normalizeText(row.status || ""),
+    id: row.id || "",
+    company: row.company || "",
+    status: row.status || "",
+    typeValue: row.type || "Stage",
+    closeDate: row.closeDate || "",
+    location: row.location || "",
+    role: row.role || "",
+    openDate: row.openDate || "",
+    applicationDate: row.applicationDate || "",
+    startMonth: row.startMonth || "",
+    url: row.url || "",
+    notes: row.notes || "",
+    link: row.url || "",
+    linkLabel: "Offre",
+  };
+}
+
+function mapNewsResult(item) {
+  return {
+    type: "news",
+    typeLabel: "News",
+    title: normalizeText(item.title || "Article"),
+    meta: formatDate(item.pubDate),
+    link: item.link || "",
+    linkLabel: "Lire",
+  };
+}
+
+function indexCalendar(events) {
+  return (events || []).map((ev) => ({
+    searchKey: normalizeForSearch(`${ev.summary || ""} ${ev.location || ""} ${ev.calendarSummary || ""}`),
+    result: mapCalendarResult(ev),
+  }));
+}
+
+function indexNotion(rows) {
+  return (rows || []).map((row) => ({
+    searchKey: normalizeForSearch(
+      `${row.title || ""} ${row.company || ""} ${row.status || ""} ${row.location || ""}`
+    ),
+    result: mapNotionResult(row),
+  }));
+}
+
+function indexNews(items) {
+  return (items || []).map((item) => ({
+    searchKey: normalizeForSearch(`${item.title || ""} ${item.description || ""}`),
+    result: mapNewsResult(item),
+  }));
 }
 
 async function loadCalendar() {
@@ -123,116 +216,66 @@ async function loadCalendar() {
   const now = new Date();
   const timeMin = now.toISOString();
   const timeMax = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  const { gcalSelectedCalendars } = await chrome.storage.local.get(["gcalSelectedCalendars"]);
-  const ids = Array.isArray(gcalSelectedCalendars) ? gcalSelectedCalendars : [];
-  const res = await new Promise((resolve) =>
-    chrome.runtime.sendMessage(
-      { type: "GCAL_LOAD_EVENTS", payload: { timeMin, timeMax, calendarIds: ids } },
-      resolve
-    )
-  );
-  cache.calendar = res?.ok ? res.events || [] : [];
+  const data = await chrome.storage.local.get(["gcalSelectedCalendars"]);
+  const ids = Array.isArray(data?.gcalSelectedCalendars) ? data.gcalSelectedCalendars : [];
+  const res = await sendMessageAsync({
+    type: "GCAL_LOAD_EVENTS",
+    payload: { timeMin, timeMax, calendarIds: ids },
+  });
+  cache.calendar = indexCalendar(res?.ok ? res.events : []);
   return cache.calendar;
 }
 
 async function loadNotion() {
   if (cache.notion) return cache.notion;
-  const res = await new Promise((resolve) =>
-    chrome.runtime.sendMessage({ type: "CHECK_NOTION_DB" }, resolve)
-  );
-  cache.notion = res?.ok ? res.rows || [] : [];
+  const res = await sendMessageAsync({ type: "CHECK_NOTION_DB" });
+  cache.notion = indexNotion(res?.ok ? res.rows : []);
   return cache.notion;
 }
 
 async function loadNews() {
   if (cache.news) return cache.news;
-  const res = await new Promise((resolve) =>
-    chrome.runtime.sendMessage({ type: "GET_YAHOO_NEWS" }, resolve)
-  );
-  cache.news = res?.ok ? res.data?.items || [] : [];
+  const res = await sendMessageAsync({ type: "GET_YAHOO_NEWS" });
+  cache.news = indexNews(res?.ok ? res.data?.items : []);
   return cache.news;
 }
 
 async function runSearch() {
-  const q = normalizeText(qEl.value).toLowerCase();
+  if (!qEl) return;
+  const runId = ++searchRunId;
+  const q = normalizeForSearch(qEl.value);
   if (!q) {
-    statusEl.textContent = "Entre un terme pour lancer la recherche.";
+    if (statusEl) statusEl.textContent = "Entre un terme pour lancer la recherche.";
     clearResults();
     return;
   }
 
-  statusEl.textContent = "Recherche...";
+  if (statusEl) statusEl.textContent = "Recherche...";
+  const loaders = [];
+  if (activeFilter === "all" || activeFilter === "calendar") loaders.push(loadCalendar());
+  if (activeFilter === "all" || activeFilter === "notion") loaders.push(loadNotion());
+  if (activeFilter === "all" || activeFilter === "news") loaders.push(loadNews());
+
+  const indexedSources = await Promise.all(loaders);
+  if (runId !== searchRunId) return;
+
   const results = [];
-
-  if (activeFilter === "all" || activeFilter === "calendar") {
-    const events = await loadCalendar();
-    events.forEach((ev) => {
-      const hay = `${ev.summary || ""} ${ev.location || ""} ${ev.calendarSummary || ""}`;
-      if (!matchQuery(hay, q)) return;
-      results.push({
-        type: "calendar",
-        typeLabel: "Calendrier",
-        title: normalizeText(ev.summary || "Evenement"),
-        meta: `${formatDate(ev.start)} · ${normalizeText(ev.calendarSummary || "")}`,
-        link: ev.htmlLink || ev.meetingLink || "",
-        linkLabel: ev.meetingLink ? "Rejoindre" : "Ouvrir",
-      });
+  indexedSources.forEach((source) => {
+    source.forEach((entry) => {
+      if (!matchQuery(entry.searchKey, q)) return;
+      results.push(entry.result);
     });
-  }
-
-  if (activeFilter === "all" || activeFilter === "notion") {
-    const rows = await loadNotion();
-    rows.forEach((row) => {
-      const hay = `${row.title || ""} ${row.company || ""} ${row.status || ""} ${row.location || ""}`;
-      if (!matchQuery(hay, q)) return;
-      results.push({
-        type: "notion",
-        typeLabel: "Stage",
-        title: normalizeText([row.company, row.title].filter(Boolean).join(" - ") || "Stage"),
-        meta: normalizeText(row.status || ""),
-        id: row.id || "",
-        company: row.company || "",
-        status: row.status || "",
-        typeValue: row.type || "Stage",
-        closeDate: row.closeDate || "",
-        location: row.location || "",
-        role: row.role || "",
-        openDate: row.openDate || "",
-        applicationDate: row.applicationDate || "",
-        startMonth: row.startMonth || "",
-        url: row.url || "",
-        notes: row.notes || "",
-        link: row.url || "",
-        linkLabel: "Offre",
-      });
-    });
-  }
-
-  if (activeFilter === "all" || activeFilter === "news") {
-    const items = await loadNews();
-    items.forEach((item) => {
-      const hay = `${item.title || ""} ${item.description || ""}`;
-      if (!matchQuery(hay, q)) return;
-      results.push({
-        type: "news",
-        typeLabel: "News",
-        title: normalizeText(item.title || "Article"),
-        meta: formatDate(item.pubDate),
-        link: item.link || "",
-        linkLabel: "Lire",
-      });
-    });
-  }
-
+  });
+  if (runId !== searchRunId) return;
   renderResults(results);
 }
 
 function scheduleSearch() {
   if (debounceId) clearTimeout(debounceId);
-  debounceId = setTimeout(runSearch, 150);
+  debounceId = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
 }
 
-qEl.addEventListener("input", scheduleSearch);
+if (qEl) qEl.addEventListener("input", scheduleSearch);
 filters.forEach((btn) => {
   btn.addEventListener("click", () => {
     filters.forEach((b) => b.classList.remove("active"));

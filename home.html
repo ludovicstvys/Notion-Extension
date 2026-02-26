@@ -317,12 +317,107 @@
         min-width: 128px;
       }
       .todo-input::placeholder { color: rgba(148, 163, 184, 0.6); }
+      .notion-queue-panel {
+        margin-top: 6px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface-2);
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .notion-queue-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+      }
+      .queue-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 26px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(15, 23, 42, 0.7);
+        color: var(--muted);
+        font-weight: 700;
+        font-size: 11px;
+      }
+      #home-queue-status {
+        margin: 4px 0 6px;
+      }
+      .notion-queue-list {
+        display: grid;
+        gap: 6px;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+      .queue-item {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.75);
+        border-left: 3px solid rgba(56, 189, 248, 0.7);
+        padding: 7px 8px;
+      }
+      .queue-item-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .queue-item-meta {
+        margin-top: 3px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .toast-stack {
+        position: fixed;
+        top: 46px;
+        right: 10px;
+        display: grid;
+        gap: 8px;
+        width: min(340px, calc(100vw - 24px));
+        z-index: 9999;
+        pointer-events: none;
+      }
+      .toast {
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        box-shadow: 0 12px 26px rgba(2, 6, 23, 0.45);
+        opacity: 0;
+        transform: translateY(-8px);
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+      .toast.success {
+        border: 1px solid rgba(74, 222, 128, 0.45);
+        background: linear-gradient(135deg, rgba(22, 163, 74, 0.95), rgba(74, 222, 128, 0.92));
+        color: #052e16;
+      }
+      .toast.queue {
+        border: 1px solid rgba(250, 204, 21, 0.55);
+        background: linear-gradient(135deg, rgba(250, 204, 21, 0.95), rgba(253, 224, 71, 0.9));
+        color: #422006;
+      }
+      .toast.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
       @media (max-width: 520px) {
         .todo-row { grid-template-columns: 1fr; }
       }
     </style>
   </head>
   <body>
+    <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
     <nav class="topnav">
       <a href="home.html">Dashboard</a>
       <a href="calendar.html">Calendrier</a>
@@ -350,6 +445,14 @@
           </label>
         </div>
         <p class="note" id="home-add-status"></p>
+        <div class="notion-queue-panel">
+          <div class="notion-queue-head">
+            <strong>Queue upload Notion</strong>
+            <span id="home-queue-count" class="queue-count">0</span>
+          </div>
+          <p class="note" id="home-queue-status">Chargement...</p>
+          <div id="home-queue-list" class="notion-queue-list"></div>
+        </div>
       </section>
       <section class="card" data-widget="focus-mode">
         <h3>Mode Focus</h3>
