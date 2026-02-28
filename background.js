@@ -2698,14 +2698,29 @@ async function updateStageStatus(payload) {
     statusProp.type === "status" || statusProp.type === "select"
       ? resolveTodoStatusName(statusProp, preferredStatus, fallbackStatuses)
       : preferredStatus;
+  let resolvedValue = value;
+  if (
+    (statusProp.type === "status" || statusProp.type === "select") &&
+    statusNorm.includes("entre")
+  ) {
+    const interviewOption = statusPropOptions(statusProp)
+      .map((opt) => normalizeText(opt?.name || ""))
+      .find((name) => {
+        const lowered = name.toLowerCase();
+        return lowered.includes("entre") || lowered.includes("interview");
+      });
+    if (interviewOption) {
+      resolvedValue = interviewOption;
+    }
+  }
 
   let propPayload = null;
   if (statusProp.type === "status") {
-    propPayload = { [statusKey]: { status: { name: value } } };
+    propPayload = { [statusKey]: { status: { name: resolvedValue } } };
   } else if (statusProp.type === "select") {
-    propPayload = { [statusKey]: { select: { name: value } } };
+    propPayload = { [statusKey]: { select: { name: resolvedValue } } };
   } else if (statusProp.type === "rich_text" || statusProp.type === "title") {
-    propPayload = { [statusKey]: { rich_text: [{ text: { content: value } }] } };
+    propPayload = { [statusKey]: { rich_text: [{ text: { content: resolvedValue } }] } };
   } else {
     throw new Error("Type de colonne Status non supporte.");
   }
@@ -2713,7 +2728,7 @@ async function updateStageStatus(payload) {
   const applicationDateKey = map.applicationDate || "Application Date";
 
   // Auto-transition side effect: set application date when candidacy is sent.
-  if (normalizeStageStatusForAutomation(value) === "candidature") {
+  if (normalizeStageStatusForAutomation(resolvedValue) === "candidature") {
     const appDateProp = db.properties?.[applicationDateKey];
     if (appDateProp?.type === "date") {
       propPayload[applicationDateKey] = { date: { start: todayISODate() } };
@@ -2726,7 +2741,7 @@ async function updateStageStatus(payload) {
 
   await notionFetch(token, `pages/${pageId}`, "PATCH", { properties: propPayload });
 
-  const nextKind = normalizeStageStatusForAutomation(value);
+  const nextKind = normalizeStageStatusForAutomation(resolvedValue);
   let rejectedQueue = null;
   if (nextKind === "refuse") {
     const jobTitleKey = map.jobTitle || "Job Title";
@@ -2738,7 +2753,7 @@ async function updateStageStatus(payload) {
         title: propText(props[jobTitleKey]) || propText(props["Name"]) || "",
         company: propText(props[companyKey]) || "",
         url: propText(props[urlKey]) || "",
-        status: value,
+        status: resolvedValue,
         source: "status-update",
       });
       rejectedQueue = { ok: true, count: Number(queueRes?.count || 0) };
@@ -2761,7 +2776,7 @@ async function updateStageStatus(payload) {
   return {
     ok: true,
     previousStatus: previousRaw,
-    newStatus: value,
+    newStatus: resolvedValue,
     statusKind: nextKind,
     rejectedQueue,
   };
@@ -3598,6 +3613,24 @@ function findDbPropKeyByType(props, types) {
   return Object.keys(props || {}).find((key) => (types || []).includes(props[key]?.type)) || "";
 }
 
+function findDbPropKeyByKeywords(props, keywords, allowedTypes = []) {
+  const terms = (keywords || [])
+    .map((term) => normalizeText(term || "").toLowerCase())
+    .filter(Boolean);
+  if (!terms.length) return "";
+
+  const allowList = Array.isArray(allowedTypes) ? allowedTypes : [];
+  return (
+    Object.keys(props || {}).find((key) => {
+      const label = normalizeText(key || "").toLowerCase();
+      if (!label) return false;
+      if (!terms.some((term) => label.includes(term))) return false;
+      if (!allowList.length) return true;
+      return allowList.includes(props?.[key]?.type);
+    }) || ""
+  );
+}
+
 function resolveTodoDbKeys(props) {
   return {
     statusKey: findDbPropKeyByName(props, ["Status"]) || findDbPropKeyByType(props, ["status", "select"]),
@@ -3607,6 +3640,115 @@ function resolveTodoDbKeys(props) {
       findDbPropKeyByType(props, ["date"]),
     notesKey:
       findDbPropKeyByName(props, ["Notes", "Note"]) || findDbPropKeyByType(props, ["rich_text"]),
+    priorityKey:
+      findDbPropKeyByName(props, ["Priority", "Priorite", "Urgence", "Importance"]) ||
+      findDbPropKeyByKeywords(props, ["priorit", "urgent", "urgence", "importance"], [
+        "select",
+        "status",
+        "multi_select",
+        "number",
+        "rich_text",
+        "title",
+      ]),
+    stageKey:
+      findDbPropKeyByName(props, [
+        "Stage",
+        "Internship",
+        "Interview Stage",
+        "Entretien",
+        "Linked Stage",
+      ]) ||
+      findDbPropKeyByKeywords(props, ["stage", "interview", "entretien"], [
+        "relation",
+        "rich_text",
+        "title",
+        "select",
+        "status",
+        "url",
+      ]),
+    addedDateKey:
+      findDbPropKeyByName(props, ["Date d'ajout", "Date ajout", "Added date", "Created", "Created time"]) ||
+      findDbPropKeyByKeywords(props, ["ajout", "added", "created"], ["date", "rich_text"]),
+  };
+}
+
+function extractTodoPriority(prop) {
+  if (!prop || typeof prop !== "object") return "";
+  if (prop.type === "number") {
+    return Number.isFinite(prop.number) ? String(prop.number) : "";
+  }
+  if (prop.type === "formula") {
+    const formula = prop.formula || {};
+    if (formula.type === "number") {
+      return Number.isFinite(formula.number) ? String(formula.number) : "";
+    }
+    if (formula.type === "string") return normalizeText(formula.string || "");
+    if (formula.type === "boolean") return formula.boolean ? "true" : "false";
+    if (formula.type === "date") return normalizeText(formula.date?.start || "");
+  }
+  return normalizeText(propText(prop) || "");
+}
+
+function extractTodoStageInfo(prop) {
+  if (!prop || typeof prop !== "object") {
+    return { stageId: "", stageLabel: "", stageLink: "" };
+  }
+
+  if (prop.type === "relation") {
+    const ids = Array.isArray(prop.relation)
+      ? prop.relation.map((entry) => normalizeText(entry?.id || "")).filter(Boolean)
+      : [];
+    return {
+      stageId: ids[0] || "",
+      stageLabel: "",
+      stageLink: "",
+    };
+  }
+
+  if (prop.type === "url") {
+    const link = normalizeText(prop.url || "");
+    return {
+      stageId: "",
+      stageLabel: link,
+      stageLink: link,
+    };
+  }
+
+  const label = normalizeText(propText(prop) || "");
+  return {
+    stageId: "",
+    stageLabel: label,
+    stageLink: "",
+  };
+}
+
+function inferTodoStageLabelFromTask(task) {
+  const normalizedTask = normalizeText(task || "");
+  if (!normalizedTask) return "";
+  const match = normalizedTask.match(/(?:preparation entretien|entretien|interview)\s*:\s*(.+)$/i);
+  return normalizeText(match?.[1] || "");
+}
+
+function mapTodoPage(page, keys) {
+  const p = page?.properties || {};
+  const resolvedKeys = keys || {};
+  const task = propText(p[resolvedKeys.taskKey]) || propText(p["Name"]) || "";
+  const notes = propText(p[resolvedKeys.notesKey]) || "";
+  const stageInfo = extractTodoStageInfo(p[resolvedKeys.stageKey]);
+  const inferredStageLabel = inferTodoStageLabelFromTask(task);
+
+  return {
+    id: page?.id || "",
+    task,
+    status: propText(p[resolvedKeys.statusKey]) || "",
+    dueDate: propText(p[resolvedKeys.dueKey]) || "",
+    notes,
+    addedDate: propText(p[resolvedKeys.addedDateKey]) || page?.created_time || "",
+    createdAt: page?.created_time || "",
+    priority: extractTodoPriority(p[resolvedKeys.priorityKey]),
+    stageId: stageInfo.stageId || "",
+    stageLabel: normalizeText(stageInfo.stageLabel || inferredStageLabel || ""),
+    stageLink: stageInfo.stageLink || "",
   };
 }
 
@@ -3668,6 +3810,85 @@ function buildTodoStatusProperty(statusProp, statusValue) {
   throw new Error("Type de colonne Status non supporte dans la base Todo.");
 }
 
+function buildTodoPriorityProperty(priorityProp, priorityValue) {
+  const value = normalizeText(priorityValue || "");
+  if (!value) return null;
+  if (!priorityProp || typeof priorityProp !== "object") return null;
+
+  if (priorityProp.type === "select") {
+    return { select: { name: value } };
+  }
+  if (priorityProp.type === "status") {
+    return { status: { name: value } };
+  }
+  if (priorityProp.type === "multi_select") {
+    return { multi_select: [{ name: value }] };
+  }
+  if (priorityProp.type === "number") {
+    const lower = value.toLowerCase();
+    let num = Number.parseFloat(value);
+    if (!Number.isFinite(num)) {
+      if (lower === "high") num = 3;
+      if (lower === "medium") num = 2;
+      if (lower === "low") num = 1;
+    }
+    if (!Number.isFinite(num)) return null;
+    return { number: num };
+  }
+  if (priorityProp.type === "rich_text") {
+    return { rich_text: [{ text: { content: value } }] };
+  }
+  if (priorityProp.type === "title") {
+    return { title: [{ text: { content: value } }] };
+  }
+  return null;
+}
+
+function normalizeRelationIds(value, fallback) {
+  const ids = [];
+  if (Array.isArray(value)) {
+    value.forEach((entry) => {
+      const normalized = normalizeText(entry || "");
+      if (normalized) ids.push(normalized);
+    });
+  }
+  const single = normalizeText(fallback || "");
+  if (single) ids.push(single);
+  return Array.from(new Set(ids));
+}
+
+function buildTodoStageProperty(stageProp, stageIds, stageLabel, stageLink) {
+  if (!stageProp || typeof stageProp !== "object") return null;
+  const ids = normalizeRelationIds(stageIds, "");
+  const label = normalizeText(stageLabel || "");
+  const link = normalizeText(stageLink || "");
+
+  if (stageProp.type === "relation") {
+    if (!ids.length) return null;
+    return { relation: ids.map((id) => ({ id })) };
+  }
+  if (stageProp.type === "url") {
+    if (!link) return null;
+    return { url: link };
+  }
+
+  const content = normalizeText(label || link || ids[0] || "");
+  if (!content) return null;
+  if (stageProp.type === "rich_text") {
+    return { rich_text: [{ text: { content } }] };
+  }
+  if (stageProp.type === "title") {
+    return { title: [{ text: { content } }] };
+  }
+  if (stageProp.type === "select") {
+    return { select: { name: content } };
+  }
+  if (stageProp.type === "status") {
+    return { status: { name: content } };
+  }
+  return null;
+}
+
 async function listNotionTodos() {
   const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
     "notionToken",
@@ -3682,7 +3903,8 @@ async function listNotionTodos() {
 
   const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
   const props = db.properties || {};
-  const { statusKey, taskKey, dueKey, notesKey } = resolveTodoDbKeys(props);
+  const todoKeys = resolveTodoDbKeys(props);
+  const { statusKey } = todoKeys;
 
   const statusProp = props?.[statusKey];
   if (!statusProp) throw new Error("Colonne Status introuvable dans la base Todo.");
@@ -3698,18 +3920,34 @@ async function listNotionTodos() {
   }
 
   const rows = await listDbRows(token, normalizedDbId, filter);
-  const mapped = rows.map((r) => {
-    const p = r.properties || {};
-    return {
-      id: r.id,
-      task: propText(p[taskKey]) || propText(p["Name"]) || "",
-      status: propText(p[statusKey]) || "",
-      dueDate: propText(p[dueKey]) || "",
-      notes: propText(p[notesKey]) || "",
-    };
-  });
+  const mapped = rows.map((row) => mapTodoPage(row, todoKeys));
 
   return { ok: true, items: mapped };
+}
+
+async function getNotionTodoById(payload) {
+  const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionTodoDbId",
+  ]);
+  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid Todo database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const pageId = normalizeText(payload?.id || payload?.todoId || "");
+  if (!pageId) throw new Error("Todo ID manquant.");
+
+  const [db, page] = await Promise.all([
+    notionFetch(token, `databases/${normalizedDbId}`, "GET"),
+    notionFetch(token, `pages/${pageId}`, "GET"),
+  ]);
+  const props = db.properties || {};
+  const todoKeys = resolveTodoDbKeys(props);
+  const item = mapTodoPage(page, todoKeys);
+  if (!item.id) throw new Error("Todo introuvable.");
+  return { ok: true, item };
 }
 
 async function createNotionTodo(payload) {
@@ -3728,14 +3966,20 @@ async function createNotionTodo(payload) {
   const status = normalizeText(payload?.status || "Not Started");
   const dueDate = normalizeText(payload?.dueDate || "");
   const notes = normalizeText(payload?.notes || "");
+  const priority = normalizeText(payload?.priority || "");
+  const stageIds = normalizeRelationIds(payload?.stageIds, payload?.stageId || payload?.linkedStageId || "");
+  const stageLabel = normalizeText(payload?.stageLabel || payload?.stage || "");
+  const stageLink = normalizeText(payload?.stageLink || payload?.stageUrl || "");
 
   const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
   const props = db.properties || {};
-  const { statusKey, taskKey, dueKey, notesKey } = resolveTodoDbKeys(props);
+  const { statusKey, taskKey, dueKey, notesKey, priorityKey, stageKey } = resolveTodoDbKeys(props);
   const statusProp = props?.[statusKey];
   const taskProp = props?.[taskKey];
   const dueProp = props?.[dueKey];
   const notesProp = props?.[notesKey];
+  const priorityProp = props?.[priorityKey];
+  const stageProp = props?.[stageKey];
 
   const properties = {};
   if (taskProp?.type === "title") {
@@ -3778,6 +4022,21 @@ async function createNotionTodo(payload) {
       properties[notesKey] = { rich_text: [{ text: { content: notes } }] };
     } else {
       properties.Notes = { rich_text: [{ text: { content: notes } }] };
+    }
+  }
+
+  if (priority && priorityKey) {
+    const priorityName = resolveTodoStatusName(priorityProp, priority, ["High", "Medium", "Low"]);
+    const priorityProperty = buildTodoPriorityProperty(priorityProp, priorityName || priority);
+    if (priorityProperty) {
+      properties[priorityKey] = priorityProperty;
+    }
+  }
+
+  if ((stageIds.length || stageLabel || stageLink) && stageKey) {
+    const stageProperty = buildTodoStageProperty(stageProp, stageIds, stageLabel, stageLink);
+    if (stageProperty) {
+      properties[stageKey] = stageProperty;
     }
   }
 
@@ -4128,6 +4387,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "LIST_TODO_NOTION") {
     return respondWith(listNotionTodos(), sendResponse, "Notion - todo list", {
       syncName: "notionTodoList",
+    });
+  }
+
+  if (msg?.type === "GET_TODO_NOTION_BY_ID") {
+    return respondWith(getNotionTodoById(msg?.payload), sendResponse, "Notion - todo detail", {
+      syncName: "notionTodoDetail",
+      meta: { id: msg?.payload?.id || msg?.payload?.todoId || null },
     });
   }
 

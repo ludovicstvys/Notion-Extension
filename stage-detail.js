@@ -230,6 +230,10 @@ if (prepSetInterviewBtn) {
           task: todoTask,
           status: "Not Started",
           dueDate: notionDateTime,
+          priority: "High",
+          stageId,
+          stageLabel,
+          stageLink: currentStageLink || "",
           notes: notesParts.join("\n"),
         },
       });
@@ -239,7 +243,7 @@ if (prepSetInterviewBtn) {
       }
 
       const statusChipEl = document.getElementById("status");
-      if (statusChipEl) statusChipEl.textContent = "Entretien";
+      if (statusChipEl) statusChipEl.textContent = normalizeText(statusRes?.newStatus || "Entretien");
       if (prepStatusEl) prepStatusEl.textContent = "Status entretien + todo crees.";
     } finally {
       prepSetInterviewBtn.disabled = false;

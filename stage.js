@@ -537,7 +537,7 @@ function updateStageStatus(id, status) {
       }
       if (res?.ok) {
         if (kanbanStatusEl) kanbanStatusEl.textContent = "";
-        item.status = status;
+        item.status = normalizeText(res?.newStatus || status);
         if (res?.rejectedQueue && !res.rejectedQueue.ok && kanbanStatusEl) {
           kanbanStatusEl.textContent = `Status OK, queue KO: ${res.rejectedQueue.error || "inconnue"}`;
         }

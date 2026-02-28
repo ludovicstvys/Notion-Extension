@@ -456,6 +456,80 @@ function renderNews(items) {
   });
 }
 
+function openTodoDetail(item) {
+  const todo = item || {};
+  const id = normalizeText(todo.id || "");
+  const params = new URLSearchParams();
+  params.set("id", id);
+  params.set("task", normalizeText(todo.task || ""));
+  params.set("status", normalizeText(todo.status || ""));
+  params.set("dueDate", normalizeText(todo.dueDate || ""));
+  params.set("addedDate", normalizeText(todo.addedDate || todo.createdAt || ""));
+  params.set("priority", normalizeText(todo.priority || ""));
+  params.set("stageId", normalizeText(todo.stageId || ""));
+  params.set("stageLabel", normalizeText(todo.stageLabel || ""));
+  params.set("stageLink", normalizeText(todo.stageLink || ""));
+  params.set("notes", normalizeText(todo.notes || ""));
+
+  const fallback = {
+    id,
+    task: normalizeText(todo.task || ""),
+    status: normalizeText(todo.status || ""),
+    dueDate: normalizeText(todo.dueDate || ""),
+    addedDate: normalizeText(todo.addedDate || todo.createdAt || ""),
+    priority: normalizeText(todo.priority || ""),
+    stageId: normalizeText(todo.stageId || ""),
+    stageLabel: normalizeText(todo.stageLabel || ""),
+    stageLink: normalizeText(todo.stageLink || ""),
+    notes: normalizeText(todo.notes || ""),
+  };
+
+  const openPage = () => {
+    window.open(`todo-detail.html?${params.toString()}`, "_blank", "noreferrer");
+  };
+
+  if (chrome?.storage?.local) {
+    chrome.storage.local.set({ todoDetailId: id, todoDetailFallback: fallback }, openPage);
+    return;
+  }
+  openPage();
+}
+
+function openStageDetailFromTodo(item) {
+  const todo = item || {};
+  const stageId = normalizeText(todo.stageId || "");
+  const stageLabel = normalizeText(todo.stageLabel || "");
+  const stageLink = normalizeText(todo.stageLink || "");
+
+  if (stageId) {
+    const query = new URLSearchParams();
+    query.set("id", stageId);
+    query.set("title", stageLabel);
+    query.set("link", stageLink);
+
+    const fallback = {
+      id: stageId,
+      title: stageLabel,
+      url: stageLink,
+    };
+
+    const openPage = () => {
+      window.open(`stage-detail.html?${query.toString()}`, "_blank", "noreferrer");
+    };
+
+    if (chrome?.storage?.local) {
+      chrome.storage.local.set({ stageDetailId: stageId, stageDetailFallback: fallback }, openPage);
+      return;
+    }
+    openPage();
+    return;
+  }
+
+  if (stageLink) {
+    window.open(stageLink, "_blank", "noreferrer");
+  }
+}
+
 function renderNotionTodos(items) {
   if (!todoNotionListEl) return;
   todoNotionListEl.innerHTML = "";
@@ -490,7 +564,23 @@ function renderNotionTodos(items) {
       meta.textContent = item.status || "";
       row.appendChild(meta);
     }
+
+    if (item.stageId || item.stageLabel || item.stageLink) {
+      const stageMeta = document.createElement("div");
+      stageMeta.className = "event-meta";
+      stageMeta.textContent = item.stageLabel ? `Stage: ${item.stageLabel}` : "Stage lie";
+      row.appendChild(stageMeta);
+    }
+
     row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.addEventListener("click", () => openTodoDetail(item));
+    row.addEventListener("keydown", (e) => {
+      if (e.target !== row) return;
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      openTodoDetail(item);
+    });
 
     const doneBtn = document.createElement("button");
     doneBtn.className = "btn secondary";
@@ -529,6 +619,18 @@ function renderNotionTodos(items) {
       );
     });
     row.appendChild(doneBtn);
+
+    if (item.stageId || item.stageLink) {
+      const stageBtn = document.createElement("button");
+      stageBtn.className = "btn secondary";
+      stageBtn.style.marginTop = "6px";
+      stageBtn.textContent = "Ouvrir stage";
+      stageBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openStageDetailFromTodo(item);
+      });
+      row.appendChild(stageBtn);
+    }
 
     todoNotionListEl.appendChild(row);
   });

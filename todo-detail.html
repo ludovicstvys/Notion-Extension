@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Details de la tache</title>
+    <style>
+      :root {
+        --bg: #0b1220;
+        --surface: #0f172a;
+        --surface-2: #0b1324;
+        --accent: #38bdf8;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --border: rgba(148, 163, 184, 0.2);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 28px;
+        background: radial-gradient(120% 120% at 0% 0%, #0f1b33 0%, #0b1220 55%, #0a1020 100%);
+        color: var(--text);
+        font-family: "Space Grotesk", system-ui, sans-serif;
+      }
+      .card {
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(11, 19, 36, 0.95));
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 20px 22px;
+        box-shadow: 0 22px 50px rgba(2, 6, 23, 0.55);
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+        letter-spacing: 0.01em;
+      }
+      .subtitle {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 12px;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        gap: 12px;
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 10px;
+        padding: 8px 10px;
+        border-radius: 12px;
+        background: rgba(11, 19, 36, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+      }
+      .row span {
+        color: var(--text);
+      }
+      .notes {
+        white-space: pre-wrap;
+        line-height: 1.45;
+        min-height: 22px;
+      }
+      .actions {
+        margin-top: 16px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 10px 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        background: rgba(10, 132, 255, 0.18);
+        color: var(--text);
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button.cta {
+        font-family: inherit;
+      }
+      .cta:hover {
+        border-color: rgba(56, 189, 248, 0.75);
+        background: rgba(10, 132, 255, 0.28);
+      }
+      .cta.hidden {
+        display: none;
+      }
+      .load-status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <section class="card">
+      <h1 id="todo-task">Tache</h1>
+      <div class="subtitle">Details de la tache Notion</div>
+
+      <div class="row"><div>Status</div><span id="todo-status">-</span></div>
+      <div class="row"><div>Deadline</div><span id="todo-deadline">-</span></div>
+      <div class="row"><div>Date ajout</div><span id="todo-added-date">-</span></div>
+      <div class="row"><div>Priorite</div><span id="todo-priority">-</span></div>
+      <div class="row"><div>Stage lie</div><span id="todo-stage">-</span></div>
+      <div class="row"><div>Notes</div><span id="todo-notes" class="notes">-</span></div>
+
+      <div class="actions">
+        <button id="todo-open-stage" class="cta hidden" type="button">Ouvrir le stage</button>
+        <a id="todo-open-link" class="cta hidden" href="#" target="_blank" rel="noreferrer">Ouvrir le lien</a>
+      </div>
+      <div id="todo-load-status" class="load-status"></div>
+    </section>
+
+    <script src="todo-detail.js"></script>
+  </body>
+</html>
