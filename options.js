@@ -436,9 +436,14 @@ async function connectGoogleRobust() {
     if (fallback?.ok) return fallback;
     const directMessage = directErr?.message || "";
     const fallbackMessage = fallback?.error || "";
+    const fallbackRaw = fallback?.rawError || "";
+    const fallbackDetailed =
+      fallbackMessage && fallbackRaw && fallbackMessage !== fallbackRaw
+        ? `${fallbackMessage} (${fallbackRaw})`
+        : fallbackMessage || fallbackRaw;
     return {
       ok: false,
-      error: fallbackMessage || directMessage || "Connexion Google impossible.",
+      error: fallbackDetailed || directMessage || "Connexion Google impossible.",
     };
   }
 }
@@ -507,8 +512,11 @@ async function loadCalendarsIntoSelect(options = {}) {
 
   if (!res?.ok) {
     const errText = res?.error || "inconnue";
+    const codeText = String(res?.code || "").toUpperCase();
     if (
-      res?.code === "AUTH_REQUIRED" ||
+      codeText === "AUTH_REQUIRED" ||
+      codeText === "AUTH_CANCELLED" ||
+      codeText.startsWith("GOOGLE_OAUTH_") ||
       /authentification|oauth|token|reconnecte/i.test(String(errText))
     ) {
       gcalConnectionState = false;
@@ -935,6 +943,10 @@ function getErrorRecommendation(err) {
   const ctx = String(err?.context || "").toLowerCase();
   const msg = String(err?.message || err?.rawMessage || "").toLowerCase();
 
+  if (code.includes("GOOGLE_OAUTH_CLIENT_INVALID")) return "Vérifie client_id OAuth + ID de l’extension.";
+  if (code.includes("GOOGLE_OAUTH_TEST_USER_REQUIRED")) return "Ajoute ton compte Google comme testeur OAuth.";
+  if (code.includes("GOOGLE_OAUTH_APP_BLOCKED")) return "Vérifie l’écran de consentement OAuth.";
+  if (code.includes("AUTH_CANCELLED")) return "Relance la connexion Google et accepte l’accès.";
   if (code.includes("AUTH_REQUIRED")) return "Reconnecte Google dans Options.";
   if (code.includes("NOTION_CONFIG_MISSING")) return "Renseigne Token + Database ID.";
   if (code.includes("NOTION_DB_ID_INVALID") || code.includes("NOTION_DB_NOT_FOUND")) {

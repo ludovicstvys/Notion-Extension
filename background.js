@@ -156,16 +156,50 @@ function classifyError(rawMessage, status) {
   ) {
     return "NETWORK_ERROR";
   }
-  if (/auth_required|auth required|authentication|oauth|token/i.test(msg)) {
+  if (
+    /auth_required|auth required|oauth2? request failed|oauth2 not granted|invalid_grant|access_denied|user did not approve|authorization page could not be loaded/i.test(
+      msg
+    )
+  ) {
     return "AUTH_REQUIRED";
   }
   return status ? `HTTP_${status}` : "UNKNOWN_ERROR";
 }
 
+function classifyGoogleIdentityError(rawMessage) {
+  const msg = String(rawMessage || "").toLowerCase();
+  if (!msg) return "AUTH_REQUIRED";
+  if (
+    /user did not approve|user cancelled|user canceled|access_denied|denied|cancelled|canceled|closed by user/.test(
+      msg
+    )
+  ) {
+    return "AUTH_CANCELLED";
+  }
+  if (/invalid_client|deleted_client|unauthorized_client|client id|oauth client/i.test(msg)) {
+    return "GOOGLE_OAUTH_CLIENT_INVALID";
+  }
+  if (/not a test user|isn't a test user|not in test users|tester/i.test(msg)) {
+    return "GOOGLE_OAUTH_TEST_USER_REQUIRED";
+  }
+  if (/access blocked|app blocked|app is blocked|restricted_client/i.test(msg)) {
+    return "GOOGLE_OAUTH_APP_BLOCKED";
+  }
+  return "AUTH_REQUIRED";
+}
+
 function friendlyMessage(code, fallback) {
   switch (code) {
+    case "AUTH_CANCELLED":
+      return "Connexion Google annulee.";
     case "AUTH_REQUIRED":
       return "Authentification requise. Reconnecte ton compte Google.";
+    case "GOOGLE_OAUTH_CLIENT_INVALID":
+      return "OAuth Google invalide. Verifie le client_id OAuth configure pour cette extension.";
+    case "GOOGLE_OAUTH_TEST_USER_REQUIRED":
+      return "Compte Google non autorise. Ajoute ce compte dans les testeurs OAuth de l'app Google.";
+    case "GOOGLE_OAUTH_APP_BLOCKED":
+      return "L'app OAuth Google est bloquee. Verifie l'ecran de consentement OAuth.";
     case "NOTION_DB_NOT_FOUND":
       return "Base Notion introuvable. Verifie l'ID et le partage.";
     case "NETWORK_ERROR":
@@ -321,6 +355,7 @@ function respondWith(promise, sendResponse, context, options = {}) {
       sendResponse({
         ok: false,
         error: entry.message,
+        rawError: entry.rawMessage,
         code: entry.code,
         context: entry.context,
       });
@@ -727,7 +762,8 @@ async function getAuthTokenRaw(interactive) {
   return new Promise((resolve, reject) => {
     chrome.identity.getAuthToken({ interactive: !!interactive }, (token) => {
       if (chrome.runtime.lastError) {
-        reject(makeError(chrome.runtime.lastError.message, "AUTH_REQUIRED"));
+        const raw = String(chrome.runtime.lastError.message || "Connexion Google impossible.");
+        reject(makeError(raw, classifyGoogleIdentityError(raw)));
         return;
       }
       if (!token) {
@@ -4083,9 +4119,14 @@ async function updateNotionTodoStatus(payload) {
 
 async function isGoogleConnected() {
   try {
-    await getAuthToken(false);
+    const token = await getAuthToken(false);
+    await verifyGoogleToken(token);
     return true;
-  } catch (_) {
+  } catch (err) {
+    const code = err?.code || classifyError(err?.message, err?.status);
+    if (code === "AUTH_REQUIRED") {
+      await clearCachedGoogleTokens();
+    }
     return false;
   }
 }
