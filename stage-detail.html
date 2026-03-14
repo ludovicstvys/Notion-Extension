@@ -140,12 +140,20 @@
         font-weight: 700;
         margin-bottom: 8px;
       }
+      .prep-hint {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
       .prep-row {
         display: flex;
         align-items: center;
         gap: 8px;
         margin: 6px 0;
         font-size: 13px;
+      }
+      .prep-row label {
+        min-width: 180px;
       }
       .prep-input {
         width: 100%;
@@ -159,6 +167,7 @@
       .prep-actions {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 8px;
         margin-top: 8px;
       }
@@ -173,7 +182,7 @@
     <section class="card">
       <h1 id="title">Stage</h1>
       <div class="title-meta" id="company">-</div>
-      <div class="subtitle">Détails du stage</div>
+      <div class="subtitle">Details du stage</div>
       <div class="row"><div>Type</div><span id="type">-</span></div>
       <div class="row"><div>Status</div><span id="status">-</span></div>
       <div class="row"><div>Deadline</div><span id="deadline">-</span></div>
@@ -193,19 +202,20 @@
         </div>
       </div>
       <div class="prep-section">
-        <div class="prep-title">Préparation entretien</div>
-        <label class="prep-row"><input type="checkbox" id="prep-cv" /> CV envoyé</label>
-        <label class="prep-row"><input type="checkbox" id="prep-follow" /> Follow-up envoyé</label>
+        <div class="prep-title">Entretien</div>
+        <div class="prep-hint">
+          Ce passage en entretien ne demande que le jour et l'heure de l'entretien.
+        </div>
         <div class="prep-row">
+          <label for="prep-reminder">Jour et heure</label>
           <input id="prep-reminder" class="prep-input" type="datetime-local" />
         </div>
-        <div class="prep-row">
-          <textarea id="prep-notes" class="notes-box" placeholder="Notes entretien..."></textarea>
-        </div>
         <div class="prep-actions">
-          <button id="prep-save" class="btn" type="button">Sauver</button>
           <button id="prep-set-interview" class="btn" type="button">
             Passer en entretien + todo
+          </button>
+          <button id="prep-set-oa-todo" class="btn" type="button">
+            Passer en OA to do + todo J+3
           </button>
           <button id="prep-set-recale" class="btn btn-danger" type="button">
             Passer en refus&eacute;

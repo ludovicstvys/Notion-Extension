@@ -582,9 +582,11 @@ function renderNotionTodos(items) {
       openTodoDetail(item);
     });
 
+    const actionRow = document.createElement("div");
+    actionRow.className = "todo-action-row";
+
     const doneBtn = document.createElement("button");
     doneBtn.className = "btn secondary";
-    doneBtn.style.marginTop = "6px";
     doneBtn.textContent = "Marquer Done";
     doneBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -618,20 +620,20 @@ function renderNotionTodos(items) {
         }
       );
     });
-    row.appendChild(doneBtn);
+    actionRow.appendChild(doneBtn);
 
     if (item.stageId || item.stageLink) {
       const stageBtn = document.createElement("button");
       stageBtn.className = "btn secondary";
-      stageBtn.style.marginTop = "6px";
       stageBtn.textContent = "Ouvrir stage";
       stageBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         openStageDetailFromTodo(item);
       });
-      row.appendChild(stageBtn);
+      actionRow.appendChild(stageBtn);
     }
 
+    row.appendChild(actionRow);
     todoNotionListEl.appendChild(row);
   });
 }

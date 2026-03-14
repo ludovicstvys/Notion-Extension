@@ -3,12 +3,9 @@ const paramId = params.get("id") || "";
 const loadStatusEl = document.getElementById("load-status");
 const notesSaveBtn = document.getElementById("notes-save");
 const notesStatusEl = document.getElementById("notes-status");
-const prepCvEl = document.getElementById("prep-cv");
-const prepFollowEl = document.getElementById("prep-follow");
 const prepReminderEl = document.getElementById("prep-reminder");
-const prepNotesEl = document.getElementById("prep-notes");
-const prepSaveBtn = document.getElementById("prep-save");
 const prepSetInterviewBtn = document.getElementById("prep-set-interview");
+const prepSetOaTodoBtn = document.getElementById("prep-set-oa-todo");
 const prepSetRecaleBtn = document.getElementById("prep-set-recale");
 const prepStatusEl = document.getElementById("prep-status");
 let currentStageId = "";
@@ -53,6 +50,56 @@ function sendMessageAsync(message) {
 
 function resolveStageId() {
   return normalizeText(currentStageId || paramId || "");
+}
+
+function buildStageLabel() {
+  const companyText = normalizeText(document.getElementById("company")?.textContent || "");
+  return normalizeText([companyText, currentStageTitle].filter(Boolean).join(" - ")) || "Stage";
+}
+
+function setDisplayedStageStatus(value) {
+  const statusChipEl = document.getElementById("status");
+  if (statusChipEl) {
+    statusChipEl.textContent = normalizeText(value || "-");
+  }
+}
+
+function toLocalISODate(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dueDateInDays(days) {
+  const target = new Date();
+  target.setDate(target.getDate() + days);
+  return toLocalISODate(target);
+}
+
+function persistInterviewState(stageId, reminderAt) {
+  if (!stageId || !chrome?.storage?.local) return;
+  const payload = {
+    reminderAt: reminderAt || "",
+    updatedAt: Date.now(),
+  };
+  chrome.storage.local.set({ [`prep:${stageId}`]: payload });
+
+  if (payload.reminderAt) {
+    chrome.runtime?.sendMessage?.({
+      type: "SCHEDULE_INTERVIEW_REMINDER",
+      payload: {
+        id: stageId,
+        when: payload.reminderAt,
+        title: currentStageTitle || "Entretien",
+        link: currentStageLink || "",
+      },
+    });
+    return;
+  }
+  chrome.runtime?.sendMessage?.({ type: "CLEAR_INTERVIEW_REMINDER", payload: { id: stageId } });
 }
 
 function applyData(data) {
@@ -140,44 +187,7 @@ function loadPrepState() {
   if (!stageId || !chrome?.storage?.local) return;
   chrome.storage.local.get([`prep:${stageId}`], (data) => {
     const prep = data[`prep:${stageId}`] || {};
-    if (prepCvEl) prepCvEl.checked = !!prep.cvSent;
-    if (prepFollowEl) prepFollowEl.checked = !!prep.followUpSent;
     if (prepReminderEl) prepReminderEl.value = prep.reminderAt || "";
-    if (prepNotesEl) prepNotesEl.value = prep.notes || "";
-  });
-}
-
-if (prepSaveBtn) {
-  prepSaveBtn.addEventListener("click", () => {
-    const stageId = resolveStageId();
-    if (!stageId) {
-      if (prepStatusEl) prepStatusEl.textContent = "Impossible sans ID.";
-      return;
-    }
-    const payload = {
-      cvSent: !!prepCvEl?.checked,
-      followUpSent: !!prepFollowEl?.checked,
-      reminderAt: prepReminderEl?.value || "",
-      notes: prepNotesEl?.value || "",
-      updatedAt: Date.now(),
-    };
-    chrome.storage.local.set({ [`prep:${stageId}`]: payload }, () => {
-      if (prepStatusEl) prepStatusEl.textContent = "Sauve.";
-    });
-
-    if (payload.reminderAt) {
-      chrome.runtime?.sendMessage?.({
-        type: "SCHEDULE_INTERVIEW_REMINDER",
-        payload: {
-          id: stageId,
-          when: payload.reminderAt,
-          title: currentStageTitle || "Entretien",
-          link: currentStageLink || "",
-        },
-      });
-    } else {
-      chrome.runtime?.sendMessage?.({ type: "CLEAR_INTERVIEW_REMINDER", payload: { id: stageId } });
-    }
   });
 }
 
@@ -198,8 +208,11 @@ if (prepSetInterviewBtn) {
 
     if (prepStatusEl) prepStatusEl.textContent = "Mise a jour du status...";
     prepSetInterviewBtn.disabled = true;
-    if (prepSaveBtn) prepSaveBtn.disabled = true;
+    if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = true;
+    if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = true;
     try {
+      persistInterviewState(stageId, reminderRaw);
+
       const statusRes = await sendMessageAsync({
         type: "UPDATE_STAGE_STATUS",
         payload: { id: stageId, status: "Entretien" },
@@ -209,9 +222,7 @@ if (prepSetInterviewBtn) {
         return;
       }
 
-      const companyText = normalizeText(document.getElementById("company")?.textContent || "");
-      const stageLabel =
-        normalizeText([companyText, currentStageTitle].filter(Boolean).join(" - ")) || "Stage";
+      const stageLabel = buildStageLabel();
       const interviewLocal = new Date(reminderRaw);
       const interviewLabel = Number.isNaN(interviewLocal.getTime())
         ? reminderRaw
@@ -220,7 +231,6 @@ if (prepSetInterviewBtn) {
       const notesParts = [
         `Entretien: ${interviewLabel}`,
         currentStageLink ? `Offre: ${currentStageLink}` : "",
-        normalizeText(prepNotesEl?.value || ""),
       ].filter(Boolean);
 
       if (prepStatusEl) prepStatusEl.textContent = "Creation du todo Notion...";
@@ -242,12 +252,70 @@ if (prepSetInterviewBtn) {
         return;
       }
 
-      const statusChipEl = document.getElementById("status");
-      if (statusChipEl) statusChipEl.textContent = normalizeText(statusRes?.newStatus || "Entretien");
+      setDisplayedStageStatus(statusRes?.newStatus || "Entretien");
       if (prepStatusEl) prepStatusEl.textContent = "Status entretien + todo crees.";
     } finally {
       prepSetInterviewBtn.disabled = false;
-      if (prepSaveBtn) prepSaveBtn.disabled = false;
+      if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = false;
+      if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = false;
+    }
+  });
+}
+
+if (prepSetOaTodoBtn) {
+  prepSetOaTodoBtn.addEventListener("click", async () => {
+    const stageId = resolveStageId();
+    if (!stageId) {
+      if (prepStatusEl) prepStatusEl.textContent = "Impossible sans ID.";
+      return;
+    }
+
+    const stageLabel = buildStageLabel();
+    const dueDate = dueDateInDays(3);
+    if (!dueDate) {
+      if (prepStatusEl) prepStatusEl.textContent = "Impossible de calculer l'echeance J+3.";
+      return;
+    }
+
+    if (prepStatusEl) prepStatusEl.textContent = "Mise a jour du status...";
+    prepSetOaTodoBtn.disabled = true;
+    if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = true;
+    if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = true;
+    try {
+      const statusRes = await sendMessageAsync({
+        type: "UPDATE_STAGE_STATUS",
+        payload: { id: stageId, status: "OA to do" },
+      });
+      if (!statusRes?.ok) {
+        if (prepStatusEl) prepStatusEl.textContent = `Erreur status: ${statusRes?.error || "inconnue"}`;
+        return;
+      }
+
+      if (prepStatusEl) prepStatusEl.textContent = "Creation du todo Notion...";
+      const todoRes = await sendMessageAsync({
+        type: "CREATE_TODO_NOTION",
+        payload: {
+          task: `OA to do: ${stageLabel}`,
+          status: "Not Started",
+          dueDate,
+          priority: "High",
+          stageId,
+          stageLabel,
+          stageLink: currentStageLink || "",
+          notes: currentStageLink ? `Offre: ${currentStageLink}` : "",
+        },
+      });
+      if (!todoRes?.ok) {
+        if (prepStatusEl) prepStatusEl.textContent = `Status OK, todo KO: ${todoRes?.error || "inconnue"}`;
+        return;
+      }
+
+      setDisplayedStageStatus(statusRes?.newStatus || "OA to do");
+      if (prepStatusEl) prepStatusEl.textContent = `Status OA to do + todo cree (echeance ${dueDate}).`;
+    } finally {
+      prepSetOaTodoBtn.disabled = false;
+      if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = false;
+      if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = false;
     }
   });
 }
@@ -263,7 +331,7 @@ if (prepSetRecaleBtn) {
     if (prepStatusEl) prepStatusEl.textContent = "Mise a jour du status...";
     prepSetRecaleBtn.disabled = true;
     if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = true;
-    if (prepSaveBtn) prepSaveBtn.disabled = true;
+    if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = true;
     try {
       const statusRes = await sendMessageAsync({
         type: "UPDATE_STAGE_STATUS",
@@ -274,10 +342,7 @@ if (prepSetRecaleBtn) {
         return;
       }
 
-      const statusChipEl = document.getElementById("status");
-      if (statusChipEl) {
-        statusChipEl.textContent = normalizeText(statusRes.newStatus || "Refus\u00e9");
-      }
+      setDisplayedStageStatus(statusRes.newStatus || "Refus\u00e9");
       if (prepStatusEl) {
         prepStatusEl.textContent =
           statusRes?.rejectedQueue && !statusRes.rejectedQueue.ok
@@ -287,7 +352,7 @@ if (prepSetRecaleBtn) {
     } finally {
       prepSetRecaleBtn.disabled = false;
       if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = false;
-      if (prepSaveBtn) prepSaveBtn.disabled = false;
+      if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = false;
     }
   });
 }

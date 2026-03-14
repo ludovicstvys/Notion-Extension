@@ -271,6 +271,9 @@
         flex-wrap: wrap;
         margin-top: 8px;
       }
+      [data-widget="todo-notion"] .mini-actions {
+        justify-content: center;
+      }
       .todo-form {
         display: grid;
         gap: 10px;
@@ -312,8 +315,15 @@
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
       }
-      #todo-notion-list .btn {
-        justify-self: start;
+      #todo-notion-list .todo-action-row {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 6px;
+      }
+      #todo-notion-list .todo-action-row .btn {
         min-width: 128px;
       }
       .todo-input::placeholder { color: rgba(148, 163, 184, 0.6); }
