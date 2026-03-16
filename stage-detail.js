@@ -6,6 +6,7 @@ const notesStatusEl = document.getElementById("notes-status");
 const prepReminderEl = document.getElementById("prep-reminder");
 const prepSetInterviewBtn = document.getElementById("prep-set-interview");
 const prepSetOaTodoBtn = document.getElementById("prep-set-oa-todo");
+const prepSetOaDoneBtn = document.getElementById("prep-set-oa-done");
 const prepSetRecaleBtn = document.getElementById("prep-set-recale");
 const prepStatusEl = document.getElementById("prep-status");
 let currentStageId = "";
@@ -62,6 +63,18 @@ function setDisplayedStageStatus(value) {
   if (statusChipEl) {
     statusChipEl.textContent = normalizeText(value || "-");
   }
+  updateOaDoneButtonVisibility(value);
+}
+
+function isOaTodoStatus(value) {
+  const norm = normalizeText(value || "").toLowerCase();
+  if (!norm) return false;
+  return norm === "oa to do" || norm === "oa todo";
+}
+
+function updateOaDoneButtonVisibility(statusValue) {
+  if (!prepSetOaDoneBtn) return;
+  prepSetOaDoneBtn.style.display = isOaTodoStatus(statusValue) ? "" : "none";
 }
 
 function toLocalISODate(value) {
@@ -108,7 +121,7 @@ function applyData(data) {
   currentStageTitle = title;
   document.getElementById("company").textContent = normalizeText(data.company || "-");
   document.getElementById("type").textContent = normalizeText(data.type || "-");
-  document.getElementById("status").textContent = normalizeText(data.status || "-");
+  setDisplayedStageStatus(data.status || "-");
   document.getElementById("deadline").textContent = formatDateDisplay(data.closeDate || "");
   document.getElementById("location").textContent = normalizeText(data.location || "-");
   document.getElementById("role").textContent = normalizeText(data.role || "-");
@@ -209,6 +222,7 @@ if (prepSetInterviewBtn) {
     if (prepStatusEl) prepStatusEl.textContent = "Mise a jour du status...";
     prepSetInterviewBtn.disabled = true;
     if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = true;
+    if (prepSetOaDoneBtn) prepSetOaDoneBtn.disabled = true;
     if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = true;
     try {
       persistInterviewState(stageId, reminderRaw);
@@ -257,6 +271,7 @@ if (prepSetInterviewBtn) {
     } finally {
       prepSetInterviewBtn.disabled = false;
       if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = false;
+      if (prepSetOaDoneBtn) prepSetOaDoneBtn.disabled = false;
       if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = false;
     }
   });
@@ -280,6 +295,7 @@ if (prepSetOaTodoBtn) {
     if (prepStatusEl) prepStatusEl.textContent = "Mise a jour du status...";
     prepSetOaTodoBtn.disabled = true;
     if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = true;
+    if (prepSetOaDoneBtn) prepSetOaDoneBtn.disabled = true;
     if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = true;
     try {
       const statusRes = await sendMessageAsync({
@@ -315,6 +331,41 @@ if (prepSetOaTodoBtn) {
     } finally {
       prepSetOaTodoBtn.disabled = false;
       if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = false;
+      if (prepSetOaDoneBtn) prepSetOaDoneBtn.disabled = false;
+      if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = false;
+    }
+  });
+}
+
+if (prepSetOaDoneBtn) {
+  prepSetOaDoneBtn.addEventListener("click", async () => {
+    const stageId = resolveStageId();
+    if (!stageId) {
+      if (prepStatusEl) prepStatusEl.textContent = "Impossible sans ID.";
+      return;
+    }
+
+    if (prepStatusEl) prepStatusEl.textContent = "Mise a jour du status...";
+    prepSetOaDoneBtn.disabled = true;
+    if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = true;
+    if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = true;
+    if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = true;
+    try {
+      const statusRes = await sendMessageAsync({
+        type: "UPDATE_STAGE_STATUS",
+        payload: { id: stageId, status: "OA done" },
+      });
+      if (!statusRes?.ok) {
+        if (prepStatusEl) prepStatusEl.textContent = `Erreur status: ${statusRes?.error || "inconnue"}`;
+        return;
+      }
+
+      setDisplayedStageStatus(statusRes?.newStatus || "OA done");
+      if (prepStatusEl) prepStatusEl.textContent = "Status passe en OA done.";
+    } finally {
+      prepSetOaDoneBtn.disabled = false;
+      if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = false;
+      if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = false;
       if (prepSetRecaleBtn) prepSetRecaleBtn.disabled = false;
     }
   });
@@ -332,6 +383,7 @@ if (prepSetRecaleBtn) {
     prepSetRecaleBtn.disabled = true;
     if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = true;
     if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = true;
+    if (prepSetOaDoneBtn) prepSetOaDoneBtn.disabled = true;
     try {
       const statusRes = await sendMessageAsync({
         type: "UPDATE_STAGE_STATUS",
@@ -353,6 +405,7 @@ if (prepSetRecaleBtn) {
       prepSetRecaleBtn.disabled = false;
       if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = false;
       if (prepSetOaTodoBtn) prepSetOaTodoBtn.disabled = false;
+      if (prepSetOaDoneBtn) prepSetOaDoneBtn.disabled = false;
     }
   });
 }
