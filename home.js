@@ -38,6 +38,29 @@ function normalizeText(input) {
   return text.normalize("NFC").trim();
 }
 
+function logTodoLoad(level, event, details) {
+  const method = level === "error" ? "error" : level === "warn" ? "warn" : "info";
+  try {
+    console[method]("[TodoNotion][Home]", event, details || {});
+  } catch (_) {
+    // Ignore console failures.
+  }
+}
+
+function formatTodoLoadError(res) {
+  const message = normalizeText(res?.error || "inconnue");
+  const code = normalizeText(res?.code || "");
+  const context = normalizeText(res?.context || "");
+  if (code === "NOTION_TODO_CONFIG_MISSING") {
+    return "Config Todo Notion manquante. Ouvre Options > Acces API > Todo Database ID ou URL.";
+  }
+  const parts = [];
+  if (code) parts.push(`code=${code}`);
+  if (context) parts.push(`ctx=${context}`);
+  if (!parts.length) return message;
+  return `${message} (${parts.join(", ")})`;
+}
+
 function queueLabelFromPayload(payload) {
   const company = normalizeText(payload?.company);
   const title = normalizeText(payload?.title);
@@ -825,22 +848,41 @@ function loadNews() {
 
 function loadNotionTodos() {
   if (todoNotionStatusEl) todoNotionStatusEl.textContent = "Chargement...";
+  logTodoLoad("info", "load:start", { at: new Date().toISOString() });
   chrome.runtime.sendMessage({ type: "LIST_TODO_NOTION" }, (res) => {
     if (chrome.runtime.lastError) {
+      logTodoLoad("error", "load:runtime_error", {
+        message: chrome.runtime.lastError.message || "Erreur extension inconnue",
+      });
       if (todoNotionStatusEl) {
-        todoNotionStatusEl.textContent = `Erreur: ${chrome.runtime.lastError.message}`;
+        todoNotionStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
       }
       renderNotionTodos([]);
       return;
     }
     if (!res?.ok) {
+      logTodoLoad("error", "load:api_error", {
+        code: res?.code || null,
+        context: res?.context || null,
+        error: res?.error || null,
+        rawError: res?.rawError || null,
+        meta: res?.meta || null,
+      });
       if (todoNotionStatusEl) {
-        todoNotionStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+        todoNotionStatusEl.textContent = `Erreur: ${formatTodoLoadError(res)}. Voir Options > Diagnostics.`;
       }
       renderNotionTodos([]);
       return;
     }
-    renderNotionTodos(res.items || []);
+    const items = Array.isArray(res?.items) ? res.items : [];
+    if (!Array.isArray(res?.items)) {
+      logTodoLoad("warn", "load:invalid_items_payload", { receivedType: typeof res?.items });
+    }
+    logTodoLoad("info", "load:success", {
+      items: items.length,
+      debug: res?.debug || null,
+    });
+    renderNotionTodos(items);
   });
 }
 
@@ -928,7 +970,5 @@ window.addEventListener("beforeunload", () => {
     notionQueueInterval = null;
   }
 });
-
-
 
 

@@ -220,13 +220,22 @@ function normalizeError(err, context, meta) {
   const status = Number.isFinite(err?.status) ? err.status : undefined;
   const code = err?.code || classifyError(rawMessage, status);
   const message = friendlyMessage(code, rawMessage);
+  const errMeta = err?.meta && typeof err.meta === "object" ? err.meta : null;
+  let resolvedMeta = errMeta ? { ...errMeta } : null;
+  if (meta !== undefined && meta !== null) {
+    if (typeof meta === "object" && !Array.isArray(meta)) {
+      resolvedMeta = { ...(resolvedMeta || {}), ...meta };
+    } else {
+      resolvedMeta = meta;
+    }
+  }
   return {
     code,
     message,
     rawMessage,
     status: status || null,
     context: context || "operation",
-    meta: meta || null,
+    meta: resolvedMeta,
     at: Date.now(),
   };
 }
@@ -273,10 +282,18 @@ async function handleError(err, context, meta, options = {}) {
   }
   const entry = normalizeError(err, context, meta);
   await recordDiagnosticError(entry);
+  try {
+    console.error("[DiagError]", entry.context, entry.code, entry.rawMessage, entry.meta || null);
+  } catch (_) {
+    // Ignore console failures.
+  }
   if (options.syncName) {
     await recordDiagnosticSync(options.syncName, "error", {
       code: entry.code,
       message: entry.message,
+      context: entry.context,
+      status: entry.status,
+      step: entry?.meta?.step || null,
     });
   }
   if (options.notify) {
@@ -358,6 +375,7 @@ function respondWith(promise, sendResponse, context, options = {}) {
         rawError: entry.rawMessage,
         code: entry.code,
         context: entry.context,
+        meta: entry.meta || null,
       });
     });
   return true;
@@ -381,12 +399,20 @@ async function notionFetch(token, path, method, body) {
     );
     return typeof data === "string" ? {} : data || {};
   } catch (err) {
+    if (err && typeof err === "object") {
+      const existingMeta = err.meta && typeof err.meta === "object" ? err.meta : {};
+      err.meta = {
+        ...existingMeta,
+        notionPath: path,
+        notionMethod: method,
+      };
+    }
     if (err?.status === 404 && path.startsWith("databases/")) {
       throw makeError(
         "Base Notion introuvable (verifie l'ID et le partage).",
         "NOTION_DB_NOT_FOUND",
         404,
-        { path }
+        { path, notionMethod: method }
       );
     }
     throw err;
@@ -1802,6 +1828,36 @@ function normalizeDbId(input) {
   return "";
 }
 
+function maskId(value) {
+  const text = normalizeText(value || "");
+  if (!text) return "";
+  if (text.length <= 8) return text;
+  return `${text.slice(0, 4)}...${text.slice(-4)}`;
+}
+
+function summarizePropertyTypes(props) {
+  const out = {};
+  Object.entries(props || {}).forEach(([key, prop]) => {
+    out[key] = normalizeText(prop?.type || "unknown");
+  });
+  return out;
+}
+
+function mergeErrorMeta(err, meta) {
+  if (!err || typeof err !== "object" || !meta || typeof meta !== "object") return;
+  const base = err.meta && typeof err.meta === "object" ? err.meta : {};
+  err.meta = { ...base, ...meta };
+}
+
+function logTodoDebug(level, event, details) {
+  const method = level === "error" ? "error" : level === "warn" ? "warn" : "info";
+  try {
+    console[method]("[TodoNotion]", event, details || {});
+  } catch (_) {
+    // Ignore console failures.
+  }
+}
+
 async function findByUrl(token, dbId, url, map) {
   const body = {
     filter: {
@@ -2836,7 +2892,9 @@ async function checkTodoDb() {
     "notionToken",
     "notionTodoDbId",
   ]);
-  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
+  if (!token || !dbId) {
+    throw makeError("Config Todo Notion manquante (Options).", "NOTION_TODO_CONFIG_MISSING");
+  }
   const normalizedDbId = normalizeDbId(dbId);
   if (!normalizedDbId) {
     throw new Error("Invalid Todo database ID. Please paste the database URL or ID in Options.");
@@ -3926,39 +3984,123 @@ function buildTodoStageProperty(stageProp, stageIds, stageLabel, stageLink) {
 }
 
 async function listNotionTodos() {
-  const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
-    "notionToken",
-    "notionTodoDbId",
-  ]);
-  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
+  let step = "load_config";
+  let normalizedDbId = "";
+  let statusKey = "";
+  let statusType = "";
+  try {
+    const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
+      "notionToken",
+      "notionTodoDbId",
+    ]);
+    logTodoDebug("info", "list:start", {
+      hasToken: !!token,
+      hasDbId: !!dbId,
+      rawDbId: maskId(dbId),
+    });
+    if (!token || !dbId) {
+      throw makeError("Config Todo Notion manquante (Options).", "NOTION_TODO_CONFIG_MISSING");
+    }
 
-  const normalizedDbId = normalizeDbId(dbId);
-  if (!normalizedDbId) {
-    throw new Error("Invalid Todo database ID. Please paste the database URL or ID in Options.");
+    step = "normalize_db_id";
+    normalizedDbId = normalizeDbId(dbId);
+    if (!normalizedDbId) {
+      throw makeError(
+        "Invalid Todo database ID. Please paste the database URL or ID in Options.",
+        "NOTION_TODO_DB_ID_INVALID",
+        undefined,
+        { rawDbId: maskId(dbId) }
+      );
+    }
+
+    step = "load_database_schema";
+    const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+    const props = db.properties || {};
+    const todoKeys = resolveTodoDbKeys(props);
+    statusKey = normalizeText(todoKeys.statusKey || "");
+
+    const statusProp = props?.[statusKey];
+    statusType = normalizeText(statusProp?.type || "");
+    logTodoDebug("info", "list:schema", {
+      dbId: maskId(normalizedDbId),
+      propertyCount: Object.keys(props).length,
+      statusKey: statusKey || null,
+      statusType: statusType || null,
+      taskKey: todoKeys.taskKey || null,
+      dueKey: todoKeys.dueKey || null,
+      notesKey: todoKeys.notesKey || null,
+      priorityKey: todoKeys.priorityKey || null,
+      stageKey: todoKeys.stageKey || null,
+      addedDateKey: todoKeys.addedDateKey || null,
+    });
+
+    if (!statusProp) {
+      throw makeError(
+        "Colonne Status introuvable dans la base Todo.",
+        "NOTION_TODO_STATUS_MISSING",
+        undefined,
+        {
+          resolvedStatusKey: statusKey || null,
+          availableProperties: Object.keys(props),
+        }
+      );
+    }
+    const doneLabel = resolveTodoDoneName(statusProp, "Done");
+
+    step = "build_filter";
+    let filter = null;
+    if (statusProp.type === "status") {
+      filter = { property: statusKey, status: { does_not_equal: doneLabel } };
+    } else if (statusProp.type === "select") {
+      filter = { property: statusKey, select: { does_not_equal: doneLabel } };
+    } else {
+      throw makeError("Type de colonne Status non supporte.", "NOTION_TODO_STATUS_TYPE_UNSUPPORTED", undefined, {
+        resolvedStatusKey: statusKey || null,
+        statusType: statusType || null,
+        propertyTypes: summarizePropertyTypes(props),
+      });
+    }
+
+    step = "query_rows";
+    const rows = await listDbRows(token, normalizedDbId, filter);
+
+    step = "map_rows";
+    const mapped = rows.map((row) => mapTodoPage(row, todoKeys));
+    const statusCounts = {};
+    mapped.forEach((item) => {
+      const key = normalizeText(item?.status || "") || "(empty)";
+      statusCounts[key] = (statusCounts[key] || 0) + 1;
+    });
+
+    const debug = {
+      dbId: maskId(normalizedDbId),
+      statusKey: statusKey || null,
+      statusType: statusType || null,
+      doneLabel: doneLabel || null,
+      rows: rows.length,
+      items: mapped.length,
+      statusCounts,
+    };
+    logTodoDebug("info", "list:success", debug);
+
+    return { ok: true, items: mapped, debug };
+  } catch (err) {
+    mergeErrorMeta(err, {
+      step,
+      dbId: maskId(normalizedDbId),
+      statusKey: statusKey || null,
+      statusType: statusType || null,
+    });
+    logTodoDebug("error", "list:failed", {
+      step,
+      dbId: maskId(normalizedDbId),
+      statusKey: statusKey || null,
+      statusType: statusType || null,
+      code: err?.code || null,
+      message: String(err?.message || err || "Erreur inconnue"),
+    });
+    throw err;
   }
-
-  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
-  const props = db.properties || {};
-  const todoKeys = resolveTodoDbKeys(props);
-  const { statusKey } = todoKeys;
-
-  const statusProp = props?.[statusKey];
-  if (!statusProp) throw new Error("Colonne Status introuvable dans la base Todo.");
-  const doneLabel = resolveTodoDoneName(statusProp, "Done");
-
-  let filter = null;
-  if (statusProp.type === "status") {
-    filter = { property: statusKey, status: { does_not_equal: doneLabel } };
-  } else if (statusProp.type === "select") {
-    filter = { property: statusKey, select: { does_not_equal: doneLabel } };
-  } else {
-    throw new Error("Type de colonne Status non supporte.");
-  }
-
-  const rows = await listDbRows(token, normalizedDbId, filter);
-  const mapped = rows.map((row) => mapTodoPage(row, todoKeys));
-
-  return { ok: true, items: mapped };
 }
 
 async function getNotionTodoById(payload) {
@@ -3966,7 +4108,9 @@ async function getNotionTodoById(payload) {
     "notionToken",
     "notionTodoDbId",
   ]);
-  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
+  if (!token || !dbId) {
+    throw makeError("Config Todo Notion manquante (Options).", "NOTION_TODO_CONFIG_MISSING");
+  }
   const normalizedDbId = normalizeDbId(dbId);
   if (!normalizedDbId) {
     throw new Error("Invalid Todo database ID. Please paste the database URL or ID in Options.");
@@ -3991,7 +4135,9 @@ async function createNotionTodo(payload) {
     "notionToken",
     "notionTodoDbId",
   ]);
-  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
+  if (!token || !dbId) {
+    throw makeError("Config Todo Notion manquante (Options).", "NOTION_TODO_CONFIG_MISSING");
+  }
   const normalizedDbId = normalizeDbId(dbId);
   if (!normalizedDbId) {
     throw new Error("Invalid Todo database ID. Please paste the database URL or ID in Options.");
@@ -4088,7 +4234,9 @@ async function updateNotionTodoStatus(payload) {
     "notionToken",
     "notionTodoDbId",
   ]);
-  if (!token || !dbId) throw new Error("Config Todo Notion manquante (Options).");
+  if (!token || !dbId) {
+    throw makeError("Config Todo Notion manquante (Options).", "NOTION_TODO_CONFIG_MISSING");
+  }
   const pageId = payload?.id;
   if (!pageId) throw new Error("Todo ID manquant.");
 
@@ -4428,6 +4576,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "LIST_TODO_NOTION") {
     return respondWith(listNotionTodos(), sendResponse, "Notion - todo list", {
       syncName: "notionTodoList",
+      meta: { operation: "LIST_TODO_NOTION" },
+      successDetails: (r) => ({
+        items: Array.isArray(r?.items) ? r.items.length : 0,
+        dbId: r?.debug?.dbId || null,
+        statusKey: r?.debug?.statusKey || null,
+        statusType: r?.debug?.statusType || null,
+        doneLabel: r?.debug?.doneLabel || null,
+      }),
     });
   }
 

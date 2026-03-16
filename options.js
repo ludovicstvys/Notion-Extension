@@ -94,6 +94,14 @@ chrome.storage.sync.get(["notionToken", "notionDbId"], (v) => {
 chrome.storage.sync.get(["notionTodoDbId"], (v) => {
   if (todoDbEl) todoDbEl.value = v.notionTodoDbId ?? SYNC_DEFAULTS.notionTodoDbId ?? "";
 });
+
+if (todoDbEl && (window.location.hash || "").toLowerCase() === "#todo-db") {
+  window.setTimeout(() => {
+    todoDbEl.scrollIntoView({ behavior: "smooth", block: "center" });
+    todoDbEl.focus();
+    todoDbEl.select();
+  }, 80);
+}
 chrome.storage.local.get(["bdfApiKey"], (v) => {
   if (bdfApiKeyEl) bdfApiKeyEl.value = v.bdfApiKey ?? LOCAL_DEFAULTS.bdfApiKey ?? "";
 });
@@ -951,6 +959,16 @@ function getErrorRecommendation(err) {
   if (code.includes("NOTION_CONFIG_MISSING")) return "Renseigne Token + Database ID.";
   if (code.includes("NOTION_DB_ID_INVALID") || code.includes("NOTION_DB_NOT_FOUND")) {
     return "Vérifie l’ID/URL de la base Notion.";
+  }
+  if (code.includes("NOTION_TODO_CONFIG_MISSING")) {
+    return "Renseigne Todo Database ID/URL dans Options > Acces API.";
+  }
+  if (code.includes("NOTION_TODO_DB_ID_INVALID")) return "Vérifie l’ID/URL de la base Todo Notion.";
+  if (code.includes("NOTION_TODO_STATUS_MISSING")) {
+    return "Ajoute une colonne Status (type status/select) dans la base Todo.";
+  }
+  if (code.includes("NOTION_TODO_STATUS_TYPE_UNSUPPORTED")) {
+    return "Le champ Status Todo doit être de type status ou select.";
   }
   if (code.includes("PLACES_KEY_MISSING")) return "Ajoute une clé Google Places.";
   if (code.includes("GCAL_CALENDAR_ID_MISSING")) return "Sélectionne un calendrier par défaut.";
