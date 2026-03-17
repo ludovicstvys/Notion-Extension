@@ -361,7 +361,12 @@ if (prepSetOaDoneBtn) {
       }
 
       setDisplayedStageStatus(statusRes?.newStatus || "OA done");
-      if (prepStatusEl) prepStatusEl.textContent = "Status passe en OA done.";
+      if (prepStatusEl) {
+        prepStatusEl.textContent =
+          statusRes?.linkedTodoSync && !statusRes.linkedTodoSync.ok
+            ? `Status OA done, sync todo KO: ${statusRes.linkedTodoSync.error || "inconnue"}`
+            : "Status passe en OA done + todo passe Done.";
+      }
     } finally {
       prepSetOaDoneBtn.disabled = false;
       if (prepSetInterviewBtn) prepSetInterviewBtn.disabled = false;

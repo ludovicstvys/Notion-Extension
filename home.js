@@ -615,7 +615,17 @@ function renderNotionTodos(items) {
       e.stopPropagation();
       doneBtn.disabled = true;
       chrome.runtime.sendMessage(
-        { type: "UPDATE_TODO_NOTION", payload: { id: item.id, status: "Done" } },
+        {
+          type: "UPDATE_TODO_NOTION",
+          payload: {
+            id: item.id,
+            status: "Done",
+            stageId: item.stageId || "",
+            stageLabel: item.stageLabel || "",
+            stageLink: item.stageLink || "",
+            task: item.task || "",
+          },
+        },
         (res) => {
           doneBtn.disabled = false;
           if (chrome.runtime.lastError) {
@@ -638,7 +648,14 @@ function renderNotionTodos(items) {
             }
             return;
           }
-          if (todoNotionStatusEl) todoNotionStatusEl.textContent = "";
+          if (todoNotionStatusEl) {
+            if (res?.stageSync && !res.stageSync.ok) {
+              todoNotionStatusEl.textContent =
+                `Todo Done, mais sync stage KO: ${normalizeText(res.stageSync.error || "inconnue")}`;
+            } else {
+              todoNotionStatusEl.textContent = "";
+            }
+          }
           loadNotionTodos();
         }
       );
