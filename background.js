@@ -2845,6 +2845,7 @@ async function updateStageStatus(payload) {
 
   let preferredStatus = statusRaw;
   let fallbackStatuses = [];
+  const isInterviewFinishedRequested = isInterviewFinishedStatusNorm(statusNorm);
   if (statusNorm.startsWith("ouv")) {
     preferredStatus = statusMap.open || defaultOpen;
     fallbackStatuses = [defaultOpen, "Open"];
@@ -2868,6 +2869,15 @@ async function updateStageStatus(payload) {
       "Postul\u00e9",
       "Applied",
     ];
+  } else if (isInterviewFinishedRequested) {
+    preferredStatus = statusRaw;
+    fallbackStatuses = [
+      "Entretien finished",
+      "Interview finished",
+      "Entretien termine",
+      "Entretien termin\u00e9",
+      "Entretien done",
+    ];
   } else if (statusNorm.includes("entre")) {
     preferredStatus = statusMap.interview || defaultInterview;
     fallbackStatuses = [defaultInterview, "Interview"];
@@ -2880,7 +2890,8 @@ async function updateStageStatus(payload) {
   let resolvedValue = value;
   if (
     (statusProp.type === "status" || statusProp.type === "select") &&
-    statusNorm.includes("entre")
+    statusNorm.includes("entre") &&
+    !isInterviewFinishedRequested
   ) {
     const interviewOption = statusPropOptions(statusProp)
       .map((opt) => normalizeText(opt?.name || ""))
@@ -2922,6 +2933,7 @@ async function updateStageStatus(payload) {
 
   const nextKind = normalizeStageStatusForAutomation(resolvedValue);
   let rejectedQueue = null;
+  let linkedTodoSync = null;
   if (nextKind === "refuse") {
     const jobTitleKey = map.jobTitle || "Job Title";
     const companyKey = map.company || "Entreprise";
@@ -2950,6 +2962,17 @@ async function updateStageStatus(payload) {
     }
   }
 
+  if (isOaDoneStageStatus(resolvedValue) && !payload?.skipLinkedTodoDone) {
+    try {
+      linkedTodoSync = await markLinkedStageOaTodosDone(pageId);
+    } catch (todoErr) {
+      linkedTodoSync = {
+        ok: false,
+        error: String(todoErr?.message || todoErr || "inconnue"),
+      };
+    }
+  }
+
   await invalidateStageSnapshot();
   scheduleStageSnapshotRefresh(150);
   return {
@@ -2958,6 +2981,7 @@ async function updateStageStatus(payload) {
     newStatus: resolvedValue,
     statusKind: nextKind,
     rejectedQueue,
+    linkedTodoSync,
   };
 }
 
@@ -3906,8 +3930,187 @@ function extractTodoStageInfo(prop) {
 function inferTodoStageLabelFromTask(task) {
   const normalizedTask = normalizeText(task || "");
   if (!normalizedTask) return "";
-  const match = normalizedTask.match(/(?:preparation entretien|entretien|interview)\s*:\s*(.+)$/i);
+  const match = normalizedTask.match(
+    /(?:preparation entretien|entretien|interview|oa\s*to\s*do|oa\s*todo|hv\s*to\s*do|hv\s*todo)\s*:\s*(.+)$/i
+  );
   return normalizeText(match?.[1] || "");
+}
+
+function isOaTodoTask(task) {
+  const normalizedTask = normalizeText(task || "").toLowerCase();
+  if (!normalizedTask) return false;
+  return /^oa\s*to\s*do\b/.test(normalizedTask) || /^oa\s*todo\b/.test(normalizedTask);
+}
+
+function isOaDoneStageStatus(status) {
+  const normalized = normalizeText(status || "").toLowerCase();
+  if (!normalized) return false;
+  return normalized === "oa done" || normalized === "oadone";
+}
+
+function isInterviewPreparationTodoTask(task) {
+  const normalizedTask = normalizeText(task || "").toLowerCase();
+  if (!normalizedTask) return false;
+  return /^preparation\s+(entretien|interview)\b/.test(normalizedTask);
+}
+
+function isInterviewFinishedStatusNorm(statusNorm) {
+  return (
+    /\b(entretien|interview)\b/.test(statusNorm) &&
+    /\b(finished|done|termine|terminee|terminé|terminée)\b/.test(statusNorm)
+  );
+}
+
+function inferStageLabelFromOaTask(task) {
+  const normalizedTask = normalizeText(task || "");
+  if (!normalizedTask) return "";
+  const match = normalizedTask.match(/(?:oa\s*to\s*do|oa\s*todo|hv\s*to\s*do|hv\s*todo)\s*:\s*(.+)$/i);
+  return normalizeText(match?.[1] || "");
+}
+
+async function resolveStageIdFromTodoContext({ stageLabel, stageLink, task }) {
+  const link = normalizeText(stageLink || "");
+  const label =
+    normalizeText(stageLabel || "") ||
+    inferStageLabelFromOaTask(task || "") ||
+    inferTodoStageLabelFromTask(task || "");
+  if (!link && !label) return "";
+
+  const snapshot = await getStageSnapshot({ allowStale: true });
+  const stages = Array.isArray(snapshot?.allStages) ? snapshot.allStages : [];
+  if (!stages.length) return "";
+
+  let bestId = "";
+  let bestScore = 0;
+  for (const stage of stages) {
+    const stageId = normalizeText(stage?.id || "");
+    if (!stageId) continue;
+    const stageUrl = normalizeText(stage?.url || "");
+    const stageTitle = normalizeText(stage?.title || "");
+    const stageCompany = normalizeText(stage?.company || "");
+    const combined = normalizeText([stageCompany, stageTitle].filter(Boolean).join(" - "));
+    let score = 0;
+
+    if (link && stageUrl && sameUrl(link, stageUrl)) {
+      score = 2;
+    } else if (label) {
+      const titleScore = diceCoefficient(label, combined || stageTitle);
+      const reverseScore = diceCoefficient(label, normalizeText([stageTitle, stageCompany].join(" - ")));
+      score = Math.max(titleScore, reverseScore);
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = stageId;
+    }
+  }
+  if (bestScore >= 0.86 || bestScore >= 2) {
+    return bestId;
+  }
+  return "";
+}
+
+async function buildStageSyncContext(stageId, fallback = {}) {
+  const baseLabel = normalizeText(fallback?.stageLabel || fallback?.title || "");
+  const baseLink = normalizeText(fallback?.stageLink || fallback?.link || "");
+  try {
+    const res = await getStageById(stageId);
+    if (!res?.ok || !res?.item) {
+      return { stageLabel: baseLabel, stageLink: baseLink };
+    }
+    const item = res.item || {};
+    const title = normalizeText(item.title || "");
+    const company = normalizeText(item.company || "");
+    const stageLabel = normalizeText([company, title].filter(Boolean).join(" - ")) || title || baseLabel;
+    const stageLink = normalizeText(item.url || "") || baseLink;
+    return { stageLabel, stageLink };
+  } catch (_) {
+    return { stageLabel: baseLabel, stageLink: baseLink };
+  }
+}
+
+async function markLinkedStageInterviewTodosDone(stageId, context = {}) {
+  const normalizedStageId = normalizeText(stageId || "");
+  if (!normalizedStageId) {
+    return { ok: false, skipped: true, reason: "missing_stage_id" };
+  }
+
+  const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionTodoDbId",
+  ]);
+  if (!token || !dbId) {
+    return { ok: false, skipped: true, reason: "todo_config_missing" };
+  }
+
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    return { ok: false, skipped: true, reason: "todo_db_invalid" };
+  }
+
+  const stageLabel = normalizeText(context?.stageLabel || "");
+  const stageLink = normalizeText(context?.stageLink || "");
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const props = db.properties || {};
+  const todoKeys = resolveTodoDbKeys(props);
+  const statusKey = normalizeText(todoKeys.statusKey || "");
+  const stageKey = normalizeText(todoKeys.stageKey || "");
+  const statusProp = props?.[statusKey];
+  const stageProp = props?.[stageKey];
+
+  if (!statusKey || !statusProp) {
+    return { ok: false, skipped: true, reason: "todo_status_missing" };
+  }
+
+  const doneLabel = resolveTodoDoneName(statusProp, "Done");
+  const doneNorm = normalizeText(doneLabel).toLowerCase();
+  const andFilters = [];
+  if (statusProp.type === "status") {
+    andFilters.push({ property: statusKey, status: { does_not_equal: doneLabel } });
+  } else if (statusProp.type === "select") {
+    andFilters.push({ property: statusKey, select: { does_not_equal: doneLabel } });
+  }
+  if (stageProp?.type === "relation") {
+    andFilters.push({ property: stageKey, relation: { contains: normalizedStageId } });
+  }
+  const filter = andFilters.length ? { and: andFilters } : null;
+  const rows = await listDbRows(token, normalizedDbId, filter);
+
+  let updated = 0;
+  for (const row of rows) {
+    const mapped = mapTodoPage(row, todoKeys);
+    if (!isInterviewPreparationTodoTask(mapped.task || "")) continue;
+
+    const statusNorm = normalizeText(mapped.status || "").toLowerCase();
+    if (statusNorm && statusNorm === doneNorm) continue;
+
+    const mappedStageId = normalizeText(mapped.stageId || "");
+    const mappedStageLabel = normalizeText(mapped.stageLabel || "");
+    const mappedStageLink = normalizeText(mapped.stageLink || "");
+
+    let isLinked = mappedStageId && mappedStageId === normalizedStageId;
+    if (!isLinked && stageLink && mappedStageLink) {
+      isLinked = sameUrl(stageLink, mappedStageLink);
+    }
+    if (!isLinked && stageLabel && mappedStageLabel) {
+      isLinked =
+        diceCoefficient(stageLabel, mappedStageLabel) >= 0.86 ||
+        normalizeCompareText(stageLabel) === normalizeCompareText(mappedStageLabel);
+    }
+    if (!isLinked && stageProp?.type === "relation") {
+      isLinked = true;
+    }
+    if (!isLinked) continue;
+
+    await notionFetch(token, `pages/${row.id}`, "PATCH", {
+      properties: {
+        [statusKey]: buildTodoStatusProperty(statusProp, doneLabel),
+      },
+    });
+    updated += 1;
+  }
+
+  return { ok: true, updated };
 }
 
 function mapTodoPage(page, keys) {
@@ -4068,6 +4271,64 @@ function buildTodoStageProperty(stageProp, stageIds, stageLabel, stageLink) {
     return { status: { name: content } };
   }
   return null;
+}
+
+async function markLinkedStageOaTodosDone(stageId) {
+  const normalizedStageId = normalizeText(stageId || "");
+  if (!normalizedStageId) {
+    return { ok: false, skipped: true, reason: "missing_stage_id" };
+  }
+
+  const { notionToken: token, notionTodoDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionTodoDbId",
+  ]);
+  if (!token || !dbId) {
+    return { ok: false, skipped: true, reason: "todo_config_missing" };
+  }
+
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    return { ok: false, skipped: true, reason: "todo_db_invalid" };
+  }
+
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const props = db.properties || {};
+  const todoKeys = resolveTodoDbKeys(props);
+  const statusKey = normalizeText(todoKeys.statusKey || "");
+  const stageKey = normalizeText(todoKeys.stageKey || "");
+  const statusProp = props?.[statusKey];
+  const stageProp = props?.[stageKey];
+
+  if (!statusKey || !statusProp || !stageKey || !stageProp) {
+    return { ok: false, skipped: true, reason: "todo_stage_or_status_missing" };
+  }
+  if (stageProp.type !== "relation") {
+    return { ok: false, skipped: true, reason: "todo_stage_not_relation" };
+  }
+
+  const doneLabel = resolveTodoDoneName(statusProp, "Done");
+  const andFilters = [{ property: stageKey, relation: { contains: normalizedStageId } }];
+  if (statusProp.type === "status") {
+    andFilters.push({ property: statusKey, status: { does_not_equal: doneLabel } });
+  } else if (statusProp.type === "select") {
+    andFilters.push({ property: statusKey, select: { does_not_equal: doneLabel } });
+  }
+
+  const rows = await listDbRows(token, normalizedDbId, { and: andFilters });
+  let updated = 0;
+  for (const row of rows) {
+    const mapped = mapTodoPage(row, todoKeys);
+    if (!isOaTodoTask(mapped.task || "")) continue;
+    await notionFetch(token, `pages/${row.id}`, "PATCH", {
+      properties: {
+        [statusKey]: buildTodoStatusProperty(statusProp, doneLabel),
+      },
+    });
+    updated += 1;
+  }
+
+  return { ok: true, updated };
 }
 
 async function listNotionTodos() {
@@ -4334,22 +4595,66 @@ async function updateNotionTodoStatus(payload) {
 
   const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
   const props = db.properties || {};
-  const { statusKey } = resolveTodoDbKeys(props);
+  const todoKeys = resolveTodoDbKeys(props);
+  const { statusKey } = todoKeys;
   const statusProp = props?.[statusKey];
   if (!statusProp || !statusKey) {
     throw new Error("Colonne Status introuvable dans la base Todo.");
   }
 
+  let stageId = normalizeText(payload?.stageId || payload?.linkedStageId || "");
+  let todoTask = normalizeText(payload?.task || payload?.todoTask || "");
+  let stageLabel = normalizeText(payload?.stageLabel || payload?.stage || "");
+  let stageLink = normalizeText(payload?.stageLink || payload?.stageUrl || "");
+  if (!stageId || !todoTask) {
+    const page = await notionFetch(token, `pages/${pageId}`, "GET");
+    const mapped = mapTodoPage(page, todoKeys);
+    stageId = stageId || normalizeText(mapped.stageId || "");
+    todoTask = todoTask || normalizeText(mapped.task || "");
+    stageLabel = stageLabel || normalizeText(mapped.stageLabel || "");
+    stageLink = stageLink || normalizeText(mapped.stageLink || "");
+  }
+  if (!stageId) {
+    stageId = await resolveStageIdFromTodoContext({
+      stageLabel,
+      stageLink,
+      task: todoTask,
+    });
+  }
+
+  const doneLabel = resolveTodoDoneName(statusProp, "Done");
   const requestedStatus = normalizeText(payload?.status || "");
   const statusName = requestedStatus
     ? resolveTodoStatusName(statusProp, requestedStatus)
-    : resolveTodoDoneName(statusProp, "Done");
+    : doneLabel;
   const properties = {
     [statusKey]: buildTodoStatusProperty(statusProp, statusName),
   };
 
   await notionFetch(token, `pages/${pageId}`, "PATCH", { properties });
-  return { ok: true };
+
+  let stageSync = null;
+  const shouldSyncStage =
+    !payload?.skipLinkedStageSync &&
+    stageId &&
+    isOaTodoTask(todoTask) &&
+    normalizeText(statusName).toLowerCase() === normalizeText(doneLabel).toLowerCase();
+  if (shouldSyncStage) {
+    try {
+      stageSync = await updateStageStatus({
+        id: stageId,
+        status: "OA done",
+        skipLinkedTodoDone: true,
+      });
+    } catch (stageErr) {
+      stageSync = {
+        ok: false,
+        error: String(stageErr?.message || stageErr || "inconnue"),
+      };
+    }
+  }
+
+  return { ok: true, stageSync };
 }
 
 async function isGoogleConnected() {
@@ -5312,20 +5617,35 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 
   if (alarm.name.startsWith(INTERVIEW_ALARM_PREFIX)) {
-    chrome.storage.local.get([alarm.name], (data) => {
-      const info = data[alarm.name];
-      if (!info) return;
-      const message = info.when
-        ? `Rappel entretien: ${new Date(info.when).toLocaleString()}`
-        : "Rappel entretien";
-      chrome.notifications.create(alarm.name, {
-        type: "basic",
-        iconUrl: "icons/icon-128.png",
-        title: info.title || "Entretien",
-        message,
-        priority: 2,
-      });
+    const stageId = normalizeText(alarm.name.slice(INTERVIEW_ALARM_PREFIX.length) || "");
+    const data = await chrome.storage.local.get([alarm.name]);
+    const info = data?.[alarm.name] || {};
+    const message = info.when
+      ? `Rappel entretien: ${new Date(info.when).toLocaleString()}`
+      : "Rappel entretien";
+    chrome.notifications.create(alarm.name, {
+      type: "basic",
+      iconUrl: "icons/icon-128.png",
+      title: info.title || "Entretien",
+      message,
+      priority: 2,
     });
+
+    if (stageId) {
+      try {
+        const stageContext = await buildStageSyncContext(stageId, info);
+        await markLinkedStageInterviewTodosDone(stageId, stageContext);
+        await updateStageStatus({
+          id: stageId,
+          status: "Entretien finished",
+          skipLinkedTodoDone: true,
+        });
+      } catch (err) {
+        await handleError(err, "Post-entretien auto-finish", { stageId }, {
+          syncName: "notionStageStatus",
+        });
+      }
+    }
     return;
   }
 
