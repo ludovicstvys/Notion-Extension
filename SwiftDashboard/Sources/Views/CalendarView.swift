@@ -121,7 +121,7 @@ struct CalendarView: View {
           }
         }
         .scrollContentBackground(.hidden)
-        .listStyle(.insetGrouped)
+        .listStyle(.automatic)
       }
       .background(
         LinearGradient(

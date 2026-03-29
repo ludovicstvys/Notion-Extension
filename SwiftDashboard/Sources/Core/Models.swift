@@ -116,6 +116,8 @@ struct AppConfig: Codable, Hashable {
     return result
   }
 
+  init() {}
+
   static var defaults: AppConfig { .init() }
 
   var hasNotionCredentials: Bool {
@@ -274,12 +276,18 @@ struct TodoItem: Identifiable, Codable, Hashable {
   var createdAt: Date
 }
 
+struct WeeklyStageProgress: Hashable {
+  var status: StageStatus
+  var count: Int
+  var ratio: Double
+}
+
 struct WeeklyStageKPI: Hashable {
   var weekStart: Date
   var addedCount: Int
   var appliedCount: Int
   var totalCount: Int
-  var progressByStatus: [(status: StageStatus, count: Int, ratio: Double)]
+  var progressByStatus: [WeeklyStageProgress]
 }
 
 struct StageBlocker: Identifiable, Hashable {

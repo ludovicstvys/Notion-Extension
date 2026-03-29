@@ -1,0 +1,67 @@
+{
+  "buildCommand" : {
+    "command" : "build",
+    "skipDependencies" : false,
+    "style" : "buildOnly"
+  },
+  "configuredTargets" : [
+    {
+      "guid" : "a70bf8d94c90fc2122c2787061ef1f355d6a5e252f4a819f259d3a031d8fa5a2"
+    }
+  ],
+  "containerPath" : "/Users/ludovicsaint-yves/Desktop/Cours/S2/Programmation/Emmanuel Hyafil/Notion-Extension/SwiftDashboard/NotionDashboardSwift.xcodeproj",
+  "continueBuildingAfterErrors" : false,
+  "dependencyScope" : "workspace",
+  "enableIndexBuildArena" : false,
+  "hideShellScriptEnvironment" : false,
+  "parameters" : {
+    "action" : "build",
+    "activeArchitecture" : "arm64",
+    "activeRunDestination" : {
+      "disableOnlyActiveArch" : false,
+      "platform" : "macosx",
+      "sdk" : "macosx26.2",
+      "sdkVariant" : "macos",
+      "supportedArchitectures" : [
+        "arm64e",
+        "arm64",
+        "x86_64"
+      ],
+      "targetArchitecture" : "arm64"
+    },
+    "arenaInfo" : {
+      "buildIntermediatesPath" : "/Users/ludovicsaint-yves/Desktop/Cours/S2/Programmation/Emmanuel Hyafil/Notion-Extension/SwiftDashboard/build/Build/Intermediates.noindex",
+      "buildProductsPath" : "/Users/ludovicsaint-yves/Desktop/Cours/S2/Programmation/Emmanuel Hyafil/Notion-Extension/SwiftDashboard/build/Build/Products",
+      "derivedDataPath" : "/Users/ludovicsaint-yves/Desktop/Cours/S2/Programmation/Emmanuel Hyafil/Notion-Extension/SwiftDashboard/build",
+      "indexDataStoreFolderPath" : "/Users/ludovicsaint-yves/Desktop/Cours/S2/Programmation/Emmanuel Hyafil/Notion-Extension/SwiftDashboard/build/Index.noindex/DataStore",
+      "indexEnableDataStore" : true,
+      "indexPCHPath" : "/Users/ludovicsaint-yves/Desktop/Cours/S2/Programmation/Emmanuel Hyafil/Notion-Extension/SwiftDashboard/build/Index.noindex/PrecompiledHeaders",
+      "pchPath" : "/Users/ludovicsaint-yves/Desktop/Cours/S2/Programmation/Emmanuel Hyafil/Notion-Extension/SwiftDashboard/build/Build/Intermediates.noindex/PrecompiledHeaders"
+    },
+    "configurationName" : "Release",
+    "overrides" : {
+      "commandLine" : {
+        "table" : {
+          "CODE_SIGN_IDENTITY" : "",
+          "CODE_SIGNING_ALLOWED" : "NO",
+          "CODE_SIGNING_REQUIRED" : "NO",
+          "SDKROOT" : "macosx26.2"
+        }
+      },
+      "synthesized" : {
+        "table" : {
+          "ACTION" : "build",
+          "ENABLE_PREVIEWS" : "NO",
+          "ENABLE_XOJIT_PREVIEWS" : "YES",
+          "ONLY_ACTIVE_ARCH" : "YES"
+        }
+      }
+    }
+  },
+  "schemeCommand" : "launch",
+  "showNonLoggedProgress" : true,
+  "useDryRun" : false,
+  "useImplicitDependencies" : true,
+  "useLegacyBuildLocations" : false,
+  "useParallelTargets" : true
+}

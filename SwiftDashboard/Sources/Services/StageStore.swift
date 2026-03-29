@@ -268,7 +268,7 @@ final class StageStore: ObservableObject {
     let progress = StageStatus.allCases.map { status in
       let count = grouped[status]?.count ?? 0
       let ratio = totalCount > 0 ? Double(count) / Double(totalCount) : 0
-      return (status: status, count: count, ratio: ratio)
+      return WeeklyStageProgress(status: status, count: count, ratio: ratio)
     }
 
     return WeeklyStageKPI(
