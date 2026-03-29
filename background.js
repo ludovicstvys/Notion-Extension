@@ -58,11 +58,14 @@ const DIAG_SYNC_KEY = "diagSyncStats";
 const DIAG_LAST_SYNC_KEY = "diagLastSyncAt";
 const URL_BLOCKER_RULES_KEY = "urlBlockerRules";
 const URL_BLOCKER_ENABLED_KEY = "urlBlockerEnabled";
+const URL_BLOCKER_LOGS_KEY = "urlBlockerLogs";
 const URL_BLOCKER_BASE_ID = 9000;
+const URL_BLOCKER_LOG_LIMIT = 80;
 
 let stageSnapshotInFlight = null;
 let stageSnapshotRefreshTimer = null;
 let notionQueueWorkerInFlight = null;
+let urlBlockerLogChain = Promise.resolve();
 
 try {
   if (chrome?.sidePanel?.setPanelBehavior) {
@@ -653,6 +656,76 @@ function normalizeUrlBlockerRules(rawRules) {
   return normalized;
 }
 
+function normalizeRawUrlBlockerRules(rawRules) {
+  const cleaned = [];
+  const seen = new Set();
+  for (const rule of rawRules || []) {
+    const value = normalizeText(rule);
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    cleaned.push(value);
+  }
+  return cleaned;
+}
+
+function normalizeUrlBlockerLogEntry(entry) {
+  const normalized = entry && typeof entry === "object" ? { ...entry } : {};
+  const tsValue = Number.parseInt(normalized.ts, 10);
+  normalized.ts = Number.isFinite(tsValue) ? tsValue : Date.now();
+  normalized.url = normalizeText(normalized.url || "");
+  normalized.type = normalizeText(normalized.type || "unknown");
+  normalized.action = normalizeText(normalized.action || "blocked");
+  normalized.source = normalizeText(normalized.source || "");
+  return normalized;
+}
+
+function queueUrlBlockerLog(entry) {
+  const normalized = normalizeUrlBlockerLogEntry(entry);
+  urlBlockerLogChain = urlBlockerLogChain
+    .then(async () => {
+      const data = await chrome.storage.local.get([URL_BLOCKER_LOGS_KEY]);
+      const logs = Array.isArray(data?.[URL_BLOCKER_LOGS_KEY]) ? data[URL_BLOCKER_LOGS_KEY] : [];
+      const next = [...logs, normalized];
+      if (next.length > URL_BLOCKER_LOG_LIMIT) {
+        next.splice(0, next.length - URL_BLOCKER_LOG_LIMIT);
+      }
+      await chrome.storage.local.set({ [URL_BLOCKER_LOGS_KEY]: next });
+    })
+    .catch((err) => {
+      console.error("URL blocker log append failed", err);
+    });
+  return urlBlockerLogChain;
+}
+
+async function getUrlBlockerState() {
+  const data = await chrome.storage.local.get([URL_BLOCKER_ENABLED_KEY, URL_BLOCKER_RULES_KEY]);
+  const enabled = data?.[URL_BLOCKER_ENABLED_KEY] !== false;
+  const rawRules = normalizeRawUrlBlockerRules(data?.[URL_BLOCKER_RULES_KEY] || []);
+  return { enabled, rawRules };
+}
+
+async function setUrlBlockerState(payload) {
+  const enabled = payload?.enabled !== false;
+  const rawRules = normalizeRawUrlBlockerRules(payload?.rawRules || []);
+  await chrome.storage.local.set({
+    [URL_BLOCKER_ENABLED_KEY]: enabled,
+    [URL_BLOCKER_RULES_KEY]: rawRules,
+  });
+  await applyUrlBlockerRules();
+  await checkAllTabsForBlocker();
+  return { enabled, rawRules };
+}
+
+async function getUrlBlockerLogs() {
+  const data = await chrome.storage.local.get([URL_BLOCKER_LOGS_KEY]);
+  const logs = Array.isArray(data?.[URL_BLOCKER_LOGS_KEY]) ? data[URL_BLOCKER_LOGS_KEY] : [];
+  return logs.map((entry) => normalizeUrlBlockerLogEntry(entry));
+}
+
+async function clearUrlBlockerLogs() {
+  await chrome.storage.local.set({ [URL_BLOCKER_LOGS_KEY]: [] });
+}
+
 function isDomainMatch(host, domain) {
   if (!host || !domain) return false;
   const h = host.toLowerCase();
@@ -724,12 +797,19 @@ async function applyUrlBlockerRules() {
 }
 
 async function ensureUrlBlockerDefaults() {
-  const state = await chrome.storage.local.get([URL_BLOCKER_ENABLED_KEY, URL_BLOCKER_RULES_KEY]);
+  const state = await chrome.storage.local.get([
+    URL_BLOCKER_ENABLED_KEY,
+    URL_BLOCKER_RULES_KEY,
+    URL_BLOCKER_LOGS_KEY,
+  ]);
   if (state[URL_BLOCKER_ENABLED_KEY] !== true) {
     await chrome.storage.local.set({ [URL_BLOCKER_ENABLED_KEY]: true });
   }
   if (!Array.isArray(state[URL_BLOCKER_RULES_KEY])) {
     await chrome.storage.local.set({ [URL_BLOCKER_RULES_KEY]: [] });
+  }
+  if (!Array.isArray(state[URL_BLOCKER_LOGS_KEY])) {
+    await chrome.storage.local.set({ [URL_BLOCKER_LOGS_KEY]: [] });
   }
 }
 
@@ -750,6 +830,13 @@ async function checkAllTabsForBlocker() {
   for (const tab of tabs) {
     if (tab.id == null || !tab.url) continue;
     if (!shouldBlockUrl(tab.url, filters)) continue;
+    queueUrlBlockerLog({
+      ts: Date.now(),
+      url: tab.url,
+      type: "tab",
+      action: "closed",
+      source: "check-all-tabs",
+    });
     try {
       await chrome.tabs.remove(tab.id);
     } catch (_) {
@@ -4606,6 +4693,42 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
   }
 
+  if (msg?.type === "GET_URL_BLOCKER_STATE" || msg?.type === "GET_STATE") {
+    return respondWith(
+      getUrlBlockerState().then((state) => ({ ok: true, state })),
+      sendResponse,
+      "URL Blocker - get state"
+    );
+  }
+
+  if (msg?.type === "SET_URL_BLOCKER_STATE" || msg?.type === "SET_STATE") {
+    const payload =
+      msg?.type === "SET_STATE"
+        ? { enabled: msg?.enabled, rawRules: msg?.rawRules }
+        : msg?.payload || {};
+    return respondWith(
+      setUrlBlockerState(payload).then((state) => ({ ok: true, state })),
+      sendResponse,
+      "URL Blocker - set state"
+    );
+  }
+
+  if (msg?.type === "GET_URL_BLOCKER_LOGS" || msg?.type === "GET_LOGS") {
+    return respondWith(
+      getUrlBlockerLogs().then((logs) => ({ ok: true, logs })),
+      sendResponse,
+      "URL Blocker - get logs"
+    );
+  }
+
+  if (msg?.type === "CLEAR_URL_BLOCKER_LOGS" || msg?.type === "CLEAR_LOGS") {
+    return respondWith(
+      clearUrlBlockerLogs().then(() => ({ ok: true })),
+      sendResponse,
+      "URL Blocker - clear logs"
+    );
+  }
+
   if (msg?.type === "URL_BLOCKER_RECHECK") {
     return respondWith(
       applyUrlBlockerRules().then(() => checkAllTabsForBlocker()).then(() => ({ ok: true })),
@@ -5256,6 +5379,19 @@ async function flushOfflineQueue() {
   await processNotionQueue();
 }
 
+if (chrome.declarativeNetRequest.onRuleMatchedDebug) {
+  chrome.declarativeNetRequest.onRuleMatchedDebug.addListener((info) => {
+    queueUrlBlockerLog({
+      ts: Date.now(),
+      url: info?.request?.url || "",
+      type: info?.request?.type || "unknown",
+      action: "blocked",
+      source: "dnr-debug",
+      ruleId: info?.rule?.ruleId || info?.ruleId || 0,
+    });
+  });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   seedDefaultConfig().catch(() => {});
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
@@ -5361,6 +5497,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         const filters = normalizeUrlBlockerRules(data[URL_BLOCKER_RULES_KEY] || []);
         if (!filters.length) return;
         if (shouldBlockUrl(candidateUrl, filters)) {
+          queueUrlBlockerLog({
+            ts: Date.now(),
+            url: candidateUrl,
+            type: "tab",
+            action: "closed",
+            source: "tab-updated",
+          });
           chrome.tabs.remove(tabId).catch(() => {});
         }
       })

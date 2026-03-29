@@ -204,6 +204,30 @@
       .chip button:hover {
         color: var(--accent);
       }
+      .url-blocker-logs {
+        margin-top: 10px;
+        max-height: 180px;
+        overflow: auto;
+        display: grid;
+        gap: 8px;
+      }
+      .url-blocker-log-row {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(11, 19, 36, 0.9);
+        padding: 8px 10px;
+        display: grid;
+        gap: 4px;
+      }
+      .url-blocker-log-time {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .url-blocker-log-url {
+        font-size: 12px;
+        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+        word-break: break-all;
+      }
       button {
         border: none;
         padding: 10px 14px;
@@ -305,13 +329,15 @@
 
         <section class="card">
           <h3 class="section-title">URL Blocker</h3>
-          <p class="note">Blocage toujours actif. Une URL ou domaine par ligne.</p>
+          <p class="note">Règles de blocage Focus. Une URL ou domaine par ligne.</p>
           <input id="url-blocker-input" placeholder="ex: youtube.com" autocomplete="off" />
           <div class="chip-list" id="url-blocker-list"></div>
           <div class="actions" style="margin-top: 12px;">
             <button id="url-blocker-save">Enregistrer liste</button>
+            <button id="url-blocker-clear-logs" class="secondary">Vider logs</button>
           </div>
           <p class="note" id="url-blocker-status"></p>
+          <div id="url-blocker-logs" class="url-blocker-logs"></div>
         </section>
 
         <section class="card">
@@ -586,5 +612,4 @@
   <script src="options.js"></script>
 </body>
 </html>
-
 

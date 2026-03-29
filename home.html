@@ -370,6 +370,81 @@
         overflow-y: auto;
         padding-right: 4px;
       }
+      .focus-panel {
+        display: grid;
+        gap: 8px;
+        align-content: start;
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding-right: 4px;
+      }
+      .focus-rule-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+      }
+      .focus-rule-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .focus-rule-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        padding: 4px 8px;
+        background: rgba(11, 19, 36, 0.9);
+        font-size: 11px;
+        color: var(--text);
+      }
+      .focus-rule-chip button {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+        font-size: 12px;
+      }
+      .focus-rule-chip button:hover {
+        color: var(--accent);
+      }
+      .focus-logs-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .focus-logs {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface-2);
+        padding: 8px;
+        max-height: 130px;
+        overflow: auto;
+        display: grid;
+        gap: 6px;
+      }
+      .focus-log-row {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.75);
+        padding: 6px 8px;
+        display: grid;
+        gap: 3px;
+      }
+      .focus-log-meta {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .focus-log-url {
+        font-size: 11px;
+        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+        word-break: break-all;
+      }
       .queue-item {
         border: 1px solid var(--border);
         border-radius: 10px;
@@ -466,14 +541,32 @@
       </section>
       <section class="card" data-widget="focus-mode">
         <h3>Mode Focus</h3>
-        <div class="pomodoro">
-          <div class="pomodoro-timer" id="pomodoro-timer">25:00</div>
-          <div class="actions">
-            <button class="btn" id="pomodoro-start">Démarrer</button>
-            <button class="btn secondary hidden" id="pomodoro-pause">Pause</button>
-            <button class="btn secondary hidden" id="pomodoro-resume">Reprendre</button>
-            <button class="btn secondary hidden" id="pomodoro-reset">Reset</button>
+        <div class="focus-panel">
+          <div class="pomodoro">
+            <div class="pomodoro-timer" id="pomodoro-timer">25:00</div>
+            <div class="actions">
+              <button class="btn" id="pomodoro-start">Démarrer</button>
+              <button class="btn secondary hidden" id="pomodoro-pause">Pause</button>
+              <button class="btn secondary hidden" id="pomodoro-resume">Reprendre</button>
+              <button class="btn secondary hidden" id="pomodoro-reset">Reset</button>
+            </div>
           </div>
+          <p class="note" id="focus-rule-status"></p>
+          <div class="focus-rule-row">
+            <input
+              id="focus-rule-input"
+              class="todo-input"
+              type="text"
+              placeholder="Ajouter un site à bloquer (ex: youtube.com)"
+            />
+            <button class="btn secondary" id="focus-rule-add">Ajouter</button>
+          </div>
+          <div id="focus-rule-list" class="focus-rule-list"></div>
+          <div class="focus-logs-head">
+            <strong>Logs Focus</strong>
+            <button class="btn secondary" id="focus-logs-clear">Vider logs</button>
+          </div>
+          <div id="focus-logs" class="focus-logs"></div>
         </div>
       </section>
       <section class="card" data-widget="events">
@@ -521,8 +614,6 @@
     <script src="home.js"></script>
   </body>
 </html>
-
-
 
 
 

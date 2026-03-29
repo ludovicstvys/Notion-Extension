@@ -24,6 +24,12 @@ const pomodoroStartBtn = document.getElementById("pomodoro-start");
 const pomodoroPauseBtn = document.getElementById("pomodoro-pause");
 const pomodoroResumeBtn = document.getElementById("pomodoro-resume");
 const pomodoroResetBtn = document.getElementById("pomodoro-reset");
+const focusRuleInputEl = document.getElementById("focus-rule-input");
+const focusRuleAddBtn = document.getElementById("focus-rule-add");
+const focusRuleListEl = document.getElementById("focus-rule-list");
+const focusRuleStatusEl = document.getElementById("focus-rule-status");
+const focusLogsEl = document.getElementById("focus-logs");
+const focusLogsClearBtn = document.getElementById("focus-logs-clear");
 const widgetSections = Array.from(document.querySelectorAll("[data-widget]"));
 let extracted = null;
 let notionQueueInterval = null;
@@ -32,6 +38,7 @@ let pomodoroMode = "work";
 let pomodoroRemaining = 25 * 60;
 let pomodoroWorkMinutes = 25;
 let pomodoroBreakMinutes = 5;
+let focusRules = [];
 
 function normalizeText(input) {
   const text = (input ?? "").toString();
@@ -254,6 +261,155 @@ function setFocusButtons(state) {
   pomodoroPauseBtn.classList.add("hidden");
   pomodoroResumeBtn.classList.add("hidden");
   pomodoroResetBtn.classList.add("hidden");
+}
+
+function formatFocusLogTime(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "--:--:--";
+  return d.toLocaleTimeString("fr-FR", { hour12: false });
+}
+
+function renderFocusRules() {
+  if (!focusRuleListEl) return;
+  focusRuleListEl.innerHTML = "";
+  if (!focusRules.length) {
+    const note = document.createElement("span");
+    note.className = "note";
+    note.textContent = "Aucune règle configurée.";
+    focusRuleListEl.appendChild(note);
+    return;
+  }
+  focusRules.forEach((rule) => {
+    const chip = document.createElement("div");
+    chip.className = "focus-rule-chip";
+
+    const text = document.createElement("span");
+    text.textContent = rule;
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.setAttribute("aria-label", `Supprimer ${rule}`);
+    del.textContent = "x";
+    del.addEventListener("click", () => {
+      focusRules = focusRules.filter((r) => r !== rule);
+      renderFocusRules();
+      saveFocusRules();
+    });
+
+    chip.appendChild(text);
+    chip.appendChild(del);
+    focusRuleListEl.appendChild(chip);
+  });
+}
+
+function renderFocusLogs(logs) {
+  if (!focusLogsEl) return;
+  focusLogsEl.innerHTML = "";
+  const list = Array.isArray(logs) ? logs : [];
+  if (!list.length) {
+    const note = document.createElement("span");
+    note.className = "note";
+    note.textContent = "Aucun blocage enregistré.";
+    focusLogsEl.appendChild(note);
+    return;
+  }
+  list
+    .slice()
+    .reverse()
+    .slice(0, 25)
+    .forEach((entry) => {
+      const row = document.createElement("div");
+      row.className = "focus-log-row";
+
+      const meta = document.createElement("div");
+      meta.className = "focus-log-meta";
+      const action =
+        entry?.action === "closed" ? "fermé" : entry?.action === "blocked" ? "bloqué" : "event";
+      meta.textContent = `${formatFocusLogTime(entry?.ts)} - ${action}`;
+
+      const url = document.createElement("div");
+      url.className = "focus-log-url";
+      url.textContent = entry?.url || "URL inconnue";
+
+      row.appendChild(meta);
+      row.appendChild(url);
+      focusLogsEl.appendChild(row);
+    });
+}
+
+function saveFocusRules() {
+  chrome.storage.local.get(["urlBlockerEnabled"], (data) => {
+    const enabled = data?.urlBlockerEnabled !== false;
+    chrome.runtime.sendMessage(
+      {
+        type: "SET_URL_BLOCKER_STATE",
+        payload: { enabled, rawRules: focusRules },
+      },
+      (res) => {
+        if (chrome.runtime.lastError) {
+          if (focusRuleStatusEl) {
+            focusRuleStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
+          }
+          return;
+        }
+        if (!res?.ok) {
+          if (focusRuleStatusEl) {
+            focusRuleStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+          }
+          return;
+        }
+        if (focusRuleStatusEl) {
+          focusRuleStatusEl.textContent = `Règles focus sauvegardées (${focusRules.length}).`;
+        }
+      }
+    );
+  });
+}
+
+function loadFocusRules() {
+  chrome.runtime.sendMessage({ type: "GET_URL_BLOCKER_STATE" }, (res) => {
+    if (chrome.runtime.lastError) {
+      if (focusRuleStatusEl) {
+        focusRuleStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
+      }
+      return;
+    }
+    if (!res?.ok) {
+      if (focusRuleStatusEl) {
+        focusRuleStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+      }
+      return;
+    }
+    focusRules = Array.isArray(res?.state?.rawRules) ? res.state.rawRules : [];
+    renderFocusRules();
+  });
+}
+
+function loadFocusLogs() {
+  chrome.runtime.sendMessage({ type: "GET_URL_BLOCKER_LOGS" }, (res) => {
+    if (chrome.runtime.lastError) {
+      renderFocusLogs([]);
+      return;
+    }
+    if (!res?.ok) {
+      renderFocusLogs([]);
+      return;
+    }
+    renderFocusLogs(res.logs || []);
+  });
+}
+
+function addFocusRuleFromInput() {
+  const value = normalizeText(focusRuleInputEl?.value || "");
+  if (!value) return;
+  if (!focusRules.includes(value)) {
+    focusRules.push(value);
+    renderFocusRules();
+    saveFocusRules();
+  }
+  if (focusRuleInputEl) {
+    focusRuleInputEl.value = "";
+  }
 }
 
 function applyWidgetPreferences() {
@@ -926,6 +1082,54 @@ if (pomodoroResetBtn) {
   });
 }
 
+if (focusRuleAddBtn) {
+  focusRuleAddBtn.addEventListener("click", () => {
+    addFocusRuleFromInput();
+  });
+}
+
+if (focusRuleInputEl) {
+  focusRuleInputEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    addFocusRuleFromInput();
+  });
+}
+
+if (focusLogsClearBtn) {
+  focusLogsClearBtn.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "CLEAR_URL_BLOCKER_LOGS" }, (res) => {
+      if (chrome.runtime.lastError) {
+        if (focusRuleStatusEl) {
+          focusRuleStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
+        }
+        return;
+      }
+      if (!res?.ok) {
+        if (focusRuleStatusEl) {
+          focusRuleStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+        }
+        return;
+      }
+      if (focusRuleStatusEl) {
+        focusRuleStatusEl.textContent = "Logs focus vidés.";
+      }
+      renderFocusLogs([]);
+    });
+  });
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.urlBlockerRules) {
+    focusRules = Array.isArray(changes.urlBlockerRules.newValue) ? changes.urlBlockerRules.newValue : [];
+    renderFocusRules();
+  }
+  if (changes.urlBlockerLogs) {
+    renderFocusLogs(changes.urlBlockerLogs.newValue || []);
+  }
+});
+
 if (todoAddBtn) {
   todoAddBtn.addEventListener("click", () => {
     const task = normalizeText(todoTaskEl?.value || "");
@@ -958,6 +1162,8 @@ if (todoToggleBtn && todoFormEl) {
 }
 
 applyWidgetPreferences();
+loadFocusRules();
+loadFocusLogs();
 loadEvents();
 loadNews();
 loadMarketsList();
@@ -970,5 +1176,3 @@ window.addEventListener("beforeunload", () => {
     notionQueueInterval = null;
   }
 });
-
-

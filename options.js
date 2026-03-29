@@ -25,7 +25,9 @@ const externalIcalStatusEl = document.getElementById("external-ical-status");
 const urlBlockerInputEl = document.getElementById("url-blocker-input");
 const urlBlockerListEl = document.getElementById("url-blocker-list");
 const urlBlockerSaveBtn = document.getElementById("url-blocker-save");
+const urlBlockerClearLogsBtn = document.getElementById("url-blocker-clear-logs");
 const urlBlockerStatusEl = document.getElementById("url-blocker-status");
+const urlBlockerLogsEl = document.getElementById("url-blocker-logs");
 const widgetEventsEl = document.getElementById("widget-events");
 const widgetAddEl = document.getElementById("widget-add");
 const widgetFocusEl = document.getElementById("widget-focus");
@@ -134,6 +136,61 @@ function renderUrlBlockerRules() {
   });
 }
 
+function formatUrlBlockerLogTime(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "--:--:--";
+  return d.toLocaleTimeString("fr-FR", { hour12: false });
+}
+
+function renderUrlBlockerLogs(logs) {
+  if (!urlBlockerLogsEl) return;
+  urlBlockerLogsEl.innerHTML = "";
+  const list = Array.isArray(logs) ? logs : [];
+  if (!list.length) {
+    const empty = document.createElement("p");
+    empty.className = "note";
+    empty.textContent = "Aucun blocage enregistré.";
+    urlBlockerLogsEl.appendChild(empty);
+    return;
+  }
+  list
+    .slice()
+    .reverse()
+    .slice(0, 30)
+    .forEach((entry) => {
+      const row = document.createElement("div");
+      row.className = "url-blocker-log-row";
+
+      const time = document.createElement("div");
+      time.className = "url-blocker-log-time";
+      const action =
+        entry?.action === "closed" ? "fermé" : entry?.action === "blocked" ? "bloqué" : "event";
+      time.textContent = `${formatUrlBlockerLogTime(entry?.ts)} - ${action}`;
+
+      const url = document.createElement("div");
+      url.className = "url-blocker-log-url";
+      url.textContent = entry?.url || "URL inconnue";
+
+      row.appendChild(time);
+      row.appendChild(url);
+      urlBlockerLogsEl.appendChild(row);
+    });
+}
+
+function loadUrlBlockerLogs() {
+  chrome.runtime.sendMessage({ type: "GET_URL_BLOCKER_LOGS" }, (res) => {
+    if (chrome.runtime.lastError) {
+      renderUrlBlockerLogs([]);
+      return;
+    }
+    if (!res?.ok) {
+      renderUrlBlockerLogs([]);
+      return;
+    }
+    renderUrlBlockerLogs(res.logs || []);
+  });
+}
+
 chrome.storage.local.get(["urlBlockerRules"], (v) => {
   if (Array.isArray(v.urlBlockerRules)) {
     urlBlockerRules = v.urlBlockerRules;
@@ -143,6 +200,21 @@ chrome.storage.local.get(["urlBlockerRules"], (v) => {
     urlBlockerRules = [];
   }
   renderUrlBlockerRules();
+});
+
+loadUrlBlockerLogs();
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.urlBlockerRules) {
+    urlBlockerRules = Array.isArray(changes.urlBlockerRules.newValue)
+      ? changes.urlBlockerRules.newValue
+      : [];
+    renderUrlBlockerRules();
+  }
+  if (changes.urlBlockerLogs) {
+    renderUrlBlockerLogs(changes.urlBlockerLogs.newValue || []);
+  }
 });
 
 chrome.storage.local.get(["dashboardWidgets", "focusModeEnabled", "pomodoroWork", "pomodoroBreak"], (v) => {
@@ -262,6 +334,29 @@ if (urlBlockerSaveBtn) {
       urlBlockerStatusEl.textContent = `Sauvegarde OK (${rules.length} règle(s)).`;
     }
     chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
+  });
+}
+
+if (urlBlockerClearLogsBtn) {
+  urlBlockerClearLogsBtn.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ type: "CLEAR_URL_BLOCKER_LOGS" }, (res) => {
+      if (chrome.runtime.lastError) {
+        if (urlBlockerStatusEl) {
+          urlBlockerStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
+        }
+        return;
+      }
+      if (!res?.ok) {
+        if (urlBlockerStatusEl) {
+          urlBlockerStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+        }
+        return;
+      }
+      if (urlBlockerStatusEl) {
+        urlBlockerStatusEl.textContent = "Logs URL Blocker vidés.";
+      }
+      renderUrlBlockerLogs([]);
+    });
   });
 }
 

@@ -65,5 +65,6 @@ self.EXTENSION_DEFAULTS = {
     // URL blocker
     urlBlockerRules: [],
     urlBlockerEnabled: true,
+    urlBlockerLogs: [],
   },
 };
