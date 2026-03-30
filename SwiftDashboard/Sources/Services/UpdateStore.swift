@@ -25,6 +25,66 @@ struct UpdateManifest: Codable, Hashable, Identifiable {
   }
 }
 
+private struct GitHubReleaseAsset: Decodable {
+  let name: String
+  let browserDownloadURL: URL
+
+  private enum CodingKeys: String, CodingKey {
+    case name
+    case browserDownloadURL = "browser_download_url"
+  }
+}
+
+private struct GitHubReleaseRecord: Decodable {
+  let tagName: String
+  let isDraft: Bool
+  let isPrerelease: Bool
+  let publishedAt: Date
+  let htmlURL: URL
+  let assets: [GitHubReleaseAsset]
+
+  private enum CodingKeys: String, CodingKey {
+    case tagName = "tag_name"
+    case isDraft = "draft"
+    case isPrerelease = "prerelease"
+    case publishedAt = "published_at"
+    case htmlURL = "html_url"
+    case assets
+  }
+}
+
+private struct ParsedReleaseTag {
+  let version: String
+  let channel: String
+  let build: Int
+
+  init?(_ rawValue: String) {
+    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix("v") else { return nil }
+
+    let body = String(trimmed.dropFirst())
+    let segments = body.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+    guard let versionSegment = segments.first, !versionSegment.isEmpty else { return nil }
+    let version = String(versionSegment)
+
+    if segments.count == 1 {
+      self.version = version
+      self.channel = "stable"
+      self.build = 0
+      return
+    }
+
+    let releaseDescriptor = String(segments[1])
+    let descriptorParts = releaseDescriptor.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+    guard descriptorParts.count == 2 else { return nil }
+    guard let build = Int(descriptorParts[1]) else { return nil }
+
+    self.version = version
+    self.channel = String(descriptorParts[0])
+    self.build = build
+  }
+}
+
 enum UpdateCheckState: Equatable {
   case idle
   case checking
@@ -65,20 +125,29 @@ struct AppSemanticVersion: Comparable, Hashable {
 
 enum UpdateStoreError: LocalizedError {
   case missingManifestURL
+  case missingRepository
   case invalidHTTPResponse
   case httpStatus(Int)
   case invalidVersion(String)
+  case noReleaseFound
+  case noReleaseAsset
 
   var errorDescription: String? {
     switch self {
     case .missingManifestURL:
       return "Update manifest URL is missing."
+    case .missingRepository:
+      return "Update repository is missing."
     case .invalidHTTPResponse:
       return "Update service returned an invalid response."
     case let .httpStatus(code):
-      return "Update service returned HTTP \(code)."
+      return code == 404 ? "Update channel is not published yet (HTTP 404)." : "Update service returned HTTP \(code)."
     case let .invalidVersion(version):
       return "Invalid update version: \(version)."
+    case .noReleaseFound:
+      return "No published update exists yet for this channel. Push `main` or publish a release first."
+    case .noReleaseAsset:
+      return "Published release does not contain a DMG asset."
     }
   }
 }
@@ -105,6 +174,7 @@ final class UpdateStore: ObservableObject {
   private let defaultCheckInterval: TimeInterval = 15 * 60
   private let fallbackManifestURL = "https://ludovicstvys.github.io/Notion-Extension/update-dev.json"
   private let fallbackChannel = "dev"
+  private let fallbackRepository = "ludovicstvys/Notion-Extension"
 
   init(
     diagnostics: DiagnosticsStore?,
@@ -145,6 +215,16 @@ final class UpdateStore: ObservableObject {
     return URL(string: rawValue)
   }
 
+  var repositoryIdentifier: String {
+    (bundle.object(forInfoDictionaryKey: "UpdateRepository") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+      .nonEmpty ?? fallbackRepository
+  }
+
+  var minimumSystemVersion: String {
+    (bundle.object(forInfoDictionaryKey: "LSMinimumSystemVersion") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+      .nonEmpty ?? "13.0"
+  }
+
   var currentVersionLabel: String {
     "\(currentVersion) (\(currentBuild))"
   }
@@ -175,7 +255,7 @@ final class UpdateStore: ObservableObject {
   var detailMessage: String {
     switch state {
     case .idle:
-      return "Checks the latest dev build published on GitHub Pages."
+      return "Checks the latest dev build from GitHub Pages, then GitHub Releases if Pages is unavailable."
     case .checking:
       return "Looking for a newer published build."
     case .upToDate:
@@ -207,7 +287,7 @@ final class UpdateStore: ObservableObject {
 
   func checkForUpdates(userInitiated: Bool) async {
     guard isSupportedPlatform else { return }
-    guard let manifestURL else {
+    guard manifestURL != nil else {
       let error = UpdateStoreError.missingManifestURL
       diagnostics?.log(severity: .warning, category: "updates", message: error.localizedDescription)
       if userInitiated {
@@ -222,22 +302,8 @@ final class UpdateStore: ObservableObject {
       lastErrorMessage = ""
     }
 
-    let request = URLRequest(url: manifestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
-
     do {
-      let (data, response) = try await session.data(for: request)
-      guard let httpResponse = response as? HTTPURLResponse else {
-        throw UpdateStoreError.invalidHTTPResponse
-      }
-      guard (200..<300).contains(httpResponse.statusCode) else {
-        throw UpdateStoreError.httpStatus(httpResponse.statusCode)
-      }
-
-      let manifest = try Self.manifestDecoder.decode(UpdateManifest.self, from: data)
-      guard AppSemanticVersion(manifest.version) != nil else {
-        throw UpdateStoreError.invalidVersion(manifest.version)
-      }
-
+      let manifest = try await loadLatestManifest()
       persistLastCheckDate(Date())
 
       if isManifestNewerThanCurrent(manifest) {
@@ -275,6 +341,115 @@ final class UpdateStore: ObservableObject {
         state = .error
       }
     }
+  }
+
+  private func loadLatestManifest() async throws -> UpdateManifest {
+    guard let manifestURL else {
+      throw UpdateStoreError.missingManifestURL
+    }
+
+    do {
+      let manifest = try await fetchManifest(from: manifestURL)
+      diagnostics?.log(
+        category: "updates",
+        message: "Loaded update manifest from Pages.",
+        metadata: ["url": manifestURL.absoluteString]
+      )
+      return manifest
+    } catch {
+      diagnostics?.log(
+        severity: .warning,
+        category: "updates",
+        message: "Primary update manifest failed. Falling back to GitHub Releases.",
+        metadata: [
+          "url": manifestURL.absoluteString,
+          "error": Self.userFacingMessage(for: error),
+        ]
+      )
+      return try await fetchManifestFromGitHubReleases()
+    }
+  }
+
+  private func fetchManifest(from url: URL) async throws -> UpdateManifest {
+    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+    let (data, response) = try await session.data(for: request)
+    guard let httpResponse = response as? HTTPURLResponse else {
+      throw UpdateStoreError.invalidHTTPResponse
+    }
+    guard (200..<300).contains(httpResponse.statusCode) else {
+      throw UpdateStoreError.httpStatus(httpResponse.statusCode)
+    }
+
+    let manifest = try Self.manifestDecoder.decode(UpdateManifest.self, from: data)
+    guard AppSemanticVersion(manifest.version) != nil else {
+      throw UpdateStoreError.invalidVersion(manifest.version)
+    }
+    return manifest
+  }
+
+  private func fetchManifestFromGitHubReleases() async throws -> UpdateManifest {
+    let repository = repositoryIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !repository.isEmpty else {
+      throw UpdateStoreError.missingRepository
+    }
+
+    guard let apiURL = URL(string: "https://api.github.com/repos/\(repository)/releases?per_page=20") else {
+      throw UpdateStoreError.invalidHTTPResponse
+    }
+
+    var request = URLRequest(url: apiURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+    request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+    let (data, response) = try await session.data(for: request)
+    guard let httpResponse = response as? HTTPURLResponse else {
+      throw UpdateStoreError.invalidHTTPResponse
+    }
+    guard (200..<300).contains(httpResponse.statusCode) else {
+      throw UpdateStoreError.httpStatus(httpResponse.statusCode)
+    }
+
+    let releases = try Self.githubReleasesDecoder.decode([GitHubReleaseRecord].self, from: data)
+
+    var resolvedManifest: UpdateManifest?
+    for release in releases {
+      if let manifest = makeManifest(from: release) {
+        resolvedManifest = manifest
+        break
+      }
+    }
+
+    guard let resolvedManifest else {
+      throw UpdateStoreError.noReleaseFound
+    }
+
+    diagnostics?.log(
+      category: "updates",
+      message: "Loaded update metadata from GitHub Releases fallback.",
+      metadata: ["repository": repository, "version": resolvedManifest.versionLabel]
+    )
+    return resolvedManifest
+  }
+
+  private func makeManifest(from release: GitHubReleaseRecord) -> UpdateManifest? {
+    guard !release.isDraft else { return nil }
+
+    guard let parsedTag = ParsedReleaseTag(release.tagName) else { return nil }
+    guard parsedTag.channel == channel else { return nil }
+    guard channel != "dev" || release.isPrerelease || release.tagName.contains("-dev.") else { return nil }
+    guard AppSemanticVersion(parsedTag.version) != nil else { return nil }
+    guard let asset = release.assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") }) else { return nil }
+
+    return UpdateManifest(
+      channel: parsedTag.channel,
+      version: parsedTag.version,
+      build: parsedTag.build,
+      minimumSystemVersion: minimumSystemVersion,
+      publishedAt: release.publishedAt,
+      downloadURL: asset.browserDownloadURL,
+      releaseNotesURL: release.htmlURL
+    )
   }
 
   func dismissUpdate() {
@@ -342,6 +517,12 @@ final class UpdateStore: ObservableObject {
       }
       throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ISO8601 date: \(rawValue)")
     }
+    return decoder
+  }()
+
+  private static let githubReleasesDecoder: JSONDecoder = {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
     return decoder
   }()
 

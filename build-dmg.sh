@@ -17,6 +17,7 @@ XCODEGEN_CACHE_BIN="${TOOLS_DIR}/bin/xcodegen"
 XCODEGEN_SCRATCH_PATH="${XCODEGEN_SCRATCH_PATH:-/tmp/NotionDashboardXcodeGenBuild}"
 STAGING_DIR="$(mktemp -d /tmp/notion-dashboard-dmg.XXXXXX)"
 BUILD_LOG="$(mktemp /tmp/notion-dashboard-build.XXXXXX.log)"
+PRESERVE_BUILD_LOG="${PRESERVE_BUILD_LOG:-}"
 XCODEBUILD_OVERRIDES=()
 
 if [[ -n "${MARKETING_VERSION_OVERRIDE:-}" ]]; then
@@ -29,7 +30,9 @@ fi
 
 cleanup() {
   rm -rf "${STAGING_DIR}"
-  rm -f "${BUILD_LOG}"
+  if [[ -z "${PRESERVE_BUILD_LOG}" ]]; then
+    rm -f "${BUILD_LOG}"
+  fi
 }
 trap cleanup EXIT
 
@@ -102,6 +105,9 @@ if ! xcodebuild \
   "${XCODEBUILD_OVERRIDES[@]}" \
   clean build >"${BUILD_LOG}" 2>&1; then
   cat "${BUILD_LOG}" >&2
+  if [[ -n "${PRESERVE_BUILD_LOG}" ]]; then
+    log "preserved build log: ${BUILD_LOG}"
+  fi
   exit 1
 fi
 

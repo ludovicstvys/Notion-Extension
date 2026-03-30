@@ -37,5 +37,7 @@
 	<string>dev</string>
 	<key>UpdateManifestURL</key>
 	<string>https://ludovicstvys.github.io/Notion-Extension/update-dev.json</string>
+	<key>UpdateRepository</key>
+	<string>ludovicstvys/Notion-Extension</string>
 </dict>
 </plist>

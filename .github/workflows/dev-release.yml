@@ -26,12 +26,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
       - name: Build DMG
         env:
           CURRENT_PROJECT_VERSION_OVERRIDE: ${{ github.run_number }}
           DERIVED_DATA_PATH: /tmp/NotionDashboardDerivedData
           APP_PRODUCT_NAME: Dashboard
+          PRESERVE_BUILD_LOG: "1"
         run: ./build-dmg.sh
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-dmg-logs
+          path: /tmp/notion-dashboard-build.*.log
+          if-no-files-found: ignore
 
       - name: Read build metadata
         id: metadata

@@ -13,7 +13,108 @@ fi
 
 export EXT_CONFIG
 
-osascript -l JavaScript <<'EOF' > "${OUTPUT_PATH}"
+if command -v node >/dev/null 2>&1; then
+node <<'NODE_EOF' > "${OUTPUT_PATH}"
+const fs = require('fs');
+const vm = require('vm');
+
+function env(name) {
+  return process.env[name] || '';
+}
+
+function deepMerge(base, override) {
+  const out = {};
+  Object.keys(base).forEach((key) => {
+    out[key] = base[key];
+  });
+  if (!override) {
+    return out;
+  }
+  Object.keys(override).forEach((key) => {
+    out[key] = override[key];
+  });
+  return out;
+}
+
+const path = env('EXT_CONFIG');
+const script = fs.readFileSync(path, 'utf8');
+const context = { self: {} };
+vm.runInNewContext(script, context, { filename: path });
+
+const defaults = context.self.EXTENSION_DEFAULTS || {};
+const sync = defaults.sync || {};
+const local = defaults.local || {};
+const reminderPrefs = local.gcalReminderPrefs || {};
+const marketPrefs = local.yahooNewsPrefs || {};
+
+const notionFieldMapDefaults = {
+  jobTitle: 'Job Title',
+  company: 'Entreprise',
+  location: 'Lieu',
+  url: 'lien offre',
+  status: 'Status',
+  closeDate: 'Date de fermeture',
+  notes: 'Notes'
+};
+
+const notionStatusMapDefaults = {
+  open: 'Ouvert',
+  applied: 'Candidature',
+  interview: 'Entretien',
+  rejected: 'Refuse'
+};
+
+const snapshot = {
+  format: 'notion-dashboard-swift-connections-v1',
+  exportedAt: new Date().toISOString(),
+  includesSensitiveData: true,
+  config: {
+    notionToken: sync.notionToken || '',
+    notionDbId: sync.notionDbId || '',
+    notionTodoDbId: sync.notionTodoDbId || '',
+    bdfApiKey: local.bdfApiKey || '',
+    googlePlacesApiKey: local.googlePlacesApiKey || '',
+    googleOAuthClientID: '608348086080-dp8647muci5st4em00pdgvrba75jq3db.apps.googleusercontent.com',
+    googleOAuthRedirectURI: 'com.googleusercontent.apps.608348086080-dp8647muci5st4em00pdgvrba75jq3db:/oauth2redirect',
+    googleOAuthScopes: [
+      'https://www.googleapis.com/auth/calendar.readonly',
+      'https://www.googleapis.com/auth/calendar.events'
+    ],
+    googleAccessToken: '',
+    googleRefreshToken: '',
+    googleTokenExpiration: null,
+    googleSelectedCalendarIDs: local.gcalSelectedCalendars || [],
+    googleDefaultCalendarID: local.gcalDefaultCalendar === 'primary' ? '' : (local.gcalDefaultCalendar || ''),
+    externalIcalUrl: local.externalIcalUrl || '',
+    pipelineAutoImportEnabled: true,
+    focusModeEnabled: !!local.focusModeEnabled,
+    pomodoroWorkMinutes: local.pomodoroWork || 25,
+    pomodoroBreakMinutes: local.pomodoroBreak || 5,
+    urlBlockerRules: local.urlBlockerRules || [],
+    reminderPrefs: {
+      defaultMinutes: reminderPrefs.default || [30],
+      meetingMinutes: reminderPrefs.meeting || [30],
+      interviewMinutes: reminderPrefs.entretien || reminderPrefs.interview || [120, 30],
+      deadlineMinutes: reminderPrefs.deadline || [1440, 60]
+    },
+    marketSymbols: marketPrefs.symbols || ['^GSPC', 'EURUSD=X', 'BTC-USD'],
+    newsEnabled: local.dashboardWidgets ? local.dashboardWidgets.news !== false : true,
+    marketsEnabled: local.dashboardWidgets ? local.dashboardWidgets.markets !== false : true,
+    notionFieldMap: deepMerge(notionFieldMapDefaults, sync.notionFieldMap),
+    notionStatusMap: deepMerge(notionStatusMapDefaults, sync.notionStatusMap),
+    wipLimits: {
+      open: 20,
+      applied: 15,
+      interview: 8,
+      rejected: 999
+    }
+  }
+};
+
+process.stdout.write(JSON.stringify(snapshot, null, 2));
+NODE_EOF
+else
+osascript -l JavaScript <<'JXA_EOF' > "${OUTPUT_PATH}"
 ObjC.import('Foundation');
 
 function env(name) {
@@ -114,7 +215,8 @@ var snapshot = {
 };
 
 JSON.stringify(snapshot, null, 2);
-EOF
+JXA_EOF
+fi
 
 if [[ ! -s "${OUTPUT_PATH}" ]]; then
   echo "Generated snapshot is empty: ${OUTPUT_PATH}" >&2

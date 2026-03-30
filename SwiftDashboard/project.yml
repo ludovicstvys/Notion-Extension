@@ -50,6 +50,7 @@ targets:
         LSMinimumSystemVersion: "13.0"
         UpdateChannel: dev
         UpdateManifestURL: https://ludovicstvys.github.io/Notion-Extension/update-dev.json
+        UpdateRepository: ludovicstvys/Notion-Extension
     settings:
       base:
         PRODUCT_NAME: Dashboard
