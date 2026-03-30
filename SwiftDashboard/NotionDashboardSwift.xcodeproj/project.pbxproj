@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -239,7 +239,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 1540;
 				TargetAttributes = {
 					ED53501E83B232D58C0AF94C = {
 						ProvisioningStyle = Automatic;
@@ -247,6 +247,7 @@
 				};
 			};
 			buildConfigurationList = C8FA8A4F88F0D6B2D9EB53CB /* Build configuration list for PBXProject "NotionDashboardSwift" */;
+			compatibilityVersion = "Xcode 15.3";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -255,7 +256,6 @@
 			);
 			mainGroup = 08BA1CEDD210C68CDC329F68;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
 			productRefGroup = 98C27D0711C40CC8475675D4 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
