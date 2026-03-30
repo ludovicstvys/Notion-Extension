@@ -25,65 +25,29 @@ struct StagesView: View {
 
   var body: some View {
     NavigationStack {
-      Group {
-        if displayMode == .kanban {
-          kanbanBoard
-        } else {
-          listView
+      GeometryReader { proxy in
+        ScrollView {
+          VStack(alignment: .leading, spacing: 24) {
+            overviewPanel(width: proxy.size.width)
+            commandBar
+
+            if displayMode == .kanban {
+              kanbanBoard
+            } else {
+              listBoard
+            }
+          }
+          .padding(.horizontal, horizontalPadding(for: proxy.size.width))
+          .padding(.vertical, 28)
+          .frame(maxWidth: 1_440)
+          .frame(maxWidth: .infinity, alignment: .top)
         }
       }
       .searchable(text: $searchText, placement: .automatic)
-      .background(
-        LinearGradient(
-          colors: [
-            Color(red: 0.06, green: 0.10, blue: 0.18),
-            Color(red: 0.03, green: 0.07, blue: 0.14),
-          ],
-          startPoint: .topLeading,
-          endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
-      )
+      .background(WorkspaceBackground())
       .navigationTitle("Stages")
-      .toolbar {
-        ToolbarItem(placement: .primaryAction) {
-          HStack(spacing: 8) {
-            Button {
-              showImportSheet = true
-            } label: {
-              Label("Import URL", systemImage: "square.and.arrow.down")
-            }
-
-            Button {
-              showAddSheet = true
-            } label: {
-              Label("Add stage", systemImage: "plus.circle.fill")
-            }
-          }
-        }
-
-        ToolbarItem(placement: .automatic) {
-          Picker("Mode", selection: $displayMode) {
-            ForEach(StageDisplayMode.allCases) { mode in
-              Text(mode.rawValue).tag(mode)
-            }
-          }
-          .pickerStyle(.segmented)
-          .frame(minWidth: 180)
-        }
-
-        ToolbarItem(placement: .automatic) {
-          Button {
-            Task { await stageStore.syncFromNotion() }
-          } label: {
-            if stageStore.isSyncingNotion {
-              ProgressView()
-            } else {
-              Label("Sync Notion", systemImage: "arrow.triangle.2.circlepath")
-            }
-          }
-        }
-      }
+      .animation(.snappy(duration: 0.26), value: filteredStages.count)
+      .animation(.snappy(duration: 0.26), value: displayMode)
       .sheet(isPresented: $showAddSheet) {
         AddStageSheet { draft in
           Task {
@@ -112,9 +76,10 @@ struct StagesView: View {
         if !stageStore.syncMessage.isEmpty {
           Text(stageStore.syncMessage)
             .font(.caption)
-            .padding(10)
+            .foregroundStyle(Color.white.opacity(0.84))
+            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.black.opacity(0.30))
+            .background(WorkspacePalette.panelBase.opacity(0.94))
         }
       }
     }
@@ -142,6 +107,199 @@ struct StagesView: View {
     }
   }
 
+  private func overviewPanel(width: CGFloat) -> some View {
+    WorkspacePanel(tint: .blue, padding: width >= 900 ? 28 : 22) {
+      VStack(alignment: .leading, spacing: 22) {
+        HStack(alignment: .top, spacing: 20) {
+          VStack(alignment: .leading, spacing: 12) {
+            Text("PIPELINE COMMAND")
+              .font(.caption2.weight(.bold))
+              .tracking(2.4)
+              .foregroundStyle(Color.white.opacity(0.70))
+
+            Text("Keep the board moving,\nnot just populated.")
+              .font(.system(size: width >= 1_120 ? 44 : 36, weight: .bold, design: .serif))
+              .foregroundStyle(.white)
+              .fixedSize(horizontal: false, vertical: true)
+
+            Text("Stages now use the same control-room language as Home: pressure, queue health, WIP, and the actions that unblock the board.")
+              .font(.subheadline)
+              .foregroundStyle(Color.white.opacity(0.72))
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          Spacer(minLength: 0)
+
+          VStack(alignment: .trailing, spacing: 10) {
+            WorkspaceBadge(text: displayMode.rawValue, tint: .orange)
+            WorkspaceBadge(text: searchText.isEmpty ? "All stages" : "Filtered", tint: .teal)
+          }
+        }
+
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 165), spacing: 12)], spacing: 12) {
+          stageMetric(title: "Total", value: "\(stageStore.stages.count)", detail: "current pipeline", tint: .blue)
+          stageMetric(title: "Filtered", value: "\(filteredStages.count)", detail: searchText.isEmpty ? "visible now" : "matching search", tint: .teal)
+          stageMetric(title: "Blockers", value: "\(stageStore.blockers.count)", detail: stageStore.blockers.isEmpty ? "no delay alert" : "needs follow-up", tint: .pink)
+          stageMetric(title: "Queue", value: "\(stageStore.pendingQueueCount)", detail: "waiting before applied", tint: .orange)
+        }
+      }
+    }
+  }
+
+  private var commandBar: some View {
+    WorkspaceCommandBar(
+      title: "Actions",
+      subtitle: "Primary pipeline actions stay close to the board, not hidden in the chrome."
+    ) {
+      Button {
+        showAddSheet = true
+      } label: {
+        Label("Add stage", systemImage: "plus.circle.fill")
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(.teal)
+
+      Button {
+        showImportSheet = true
+      } label: {
+        Label("Import URL", systemImage: "square.and.arrow.down")
+      }
+      .buttonStyle(.bordered)
+
+      Button {
+        Task { await stageStore.syncFromNotion() }
+      } label: {
+        Label(stageStore.isSyncingNotion ? "Syncing..." : "Sync Notion", systemImage: "arrow.triangle.2.circlepath")
+      }
+      .buttonStyle(.bordered)
+
+      Picker("Mode", selection: $displayMode) {
+        ForEach(StageDisplayMode.allCases) { mode in
+          Text(mode.rawValue).tag(mode)
+        }
+      }
+      .pickerStyle(.segmented)
+      .frame(width: 180)
+
+      WorkspaceBadge(text: "\(filteredStages.count) visible", tint: .blue)
+    }
+  }
+
+  private var listBoard: some View {
+    WorkspacePanel(
+      title: "Pipeline list",
+      subtitle: "A denser review mode for scanning every stage without losing the new visual hierarchy.",
+      tint: .teal
+    ) {
+      if filteredStages.isEmpty {
+        stageEmptyState(
+          title: "No stage found",
+          message: searchText.isEmpty ? "Add a stage manually or import one from a job URL." : "No stage matches the current search."
+        )
+      } else {
+        LazyVStack(spacing: 14) {
+          ForEach(filteredStages) { stage in
+            StageCardView(
+              stage: stage,
+              limitExceeded: false,
+              onStatusChange: { newStatus in
+                Task { await stageStore.updateStageStatus(stageID: stage.id, to: newStatus) }
+              },
+              onDelete: {
+                stageStore.deleteStage(stageID: stage.id)
+              }
+            )
+          }
+        }
+      }
+    }
+  }
+
+  private var kanbanBoard: some View {
+    WorkspacePanel(
+      title: "Pipeline board",
+      subtitle: "Each column shows pressure against WIP limits with the same visual rhythm as the Home control board.",
+      tint: .orange
+    ) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(alignment: .top, spacing: 16) {
+          ForEach(StageStatus.allCases) { status in
+            kanbanColumn(for: status)
+          }
+        }
+        .padding(.vertical, 4)
+      }
+    }
+  }
+
+  private func kanbanColumn(for status: StageStatus) -> some View {
+    let items = filteredStages.filter { $0.status == status }
+    let limit = configStore.config.wipLimit(for: status)
+    let exceeded = items.count > limit
+
+    return VStack(alignment: .leading, spacing: 14) {
+      HStack(alignment: .top) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(status.rawValue)
+            .font(.headline)
+            .foregroundStyle(.white)
+          Text(exceeded ? "Above WIP target" : "Within target")
+            .font(.caption)
+            .foregroundStyle(Color.white.opacity(0.62))
+        }
+        Spacer(minLength: 8)
+        WorkspaceBadge(text: "\(items.count)/\(limit)", tint: exceeded ? .red : statusColor(status))
+      }
+
+      if items.isEmpty {
+        stageEmptyState(title: "No stage", message: "This column is currently empty.")
+      } else {
+        VStack(spacing: 12) {
+          ForEach(items) { stage in
+            StageCardView(
+              stage: stage,
+              limitExceeded: exceeded,
+              onStatusChange: { newStatus in
+                Task { await stageStore.updateStageStatus(stageID: stage.id, to: newStatus) }
+              },
+              onDelete: {
+                stageStore.deleteStage(stageID: stage.id)
+              }
+            )
+          }
+        }
+      }
+    }
+    .padding(18)
+    .frame(width: 328, alignment: .topLeading)
+    .workspaceInteractiveSurface(cornerRadius: 24, tint: exceeded ? .red : statusColor(status), raised: false)
+  }
+
+  private func stageMetric(title: String, value: String, detail: String, tint: Color) -> some View {
+    WorkspaceMetricTile(title: title, value: value, detail: detail, tint: tint)
+  }
+
+  private func stageEmptyState(title: String, message: String) -> some View {
+    WorkspaceEmptyState(title: title, message: message, tint: .blue, systemImage: "tray")
+  }
+
+  private func horizontalPadding(for width: CGFloat) -> CGFloat {
+    width >= 900 ? 28 : 18
+  }
+
+  private func statusColor(_ status: StageStatus) -> Color {
+    switch status {
+    case .open:
+      return .blue
+    case .applied:
+      return .green
+    case .interview:
+      return .orange
+    case .rejected:
+      return .red
+    }
+  }
+
   private var filteredStages: [Stage] {
     let query = searchText.normalizedToken
     guard !query.isEmpty else { return stageStore.stages }
@@ -156,84 +314,6 @@ struct StagesView: View {
       .joined(separator: " ")
       .normalizedToken
       .contains(query)
-    }
-  }
-
-  private var listView: some View {
-    List {
-      ForEach(filteredStages) { stage in
-        StageCardView(
-          stage: stage,
-          limitExceeded: false,
-          onStatusChange: { newStatus in
-            Task { await stageStore.updateStageStatus(stageID: stage.id, to: newStatus) }
-          },
-          onDelete: {
-            stageStore.deleteStage(stageID: stage.id)
-          }
-        )
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-      }
-    }
-    .scrollContentBackground(.hidden)
-    .listStyle(.plain)
-  }
-
-  private var kanbanBoard: some View {
-    ScrollView(.horizontal) {
-      HStack(alignment: .top, spacing: 14) {
-        ForEach(StageStatus.allCases) { status in
-          let items = filteredStages.filter { $0.status == status }
-          let limit = configStore.config.wipLimit(for: status)
-          VStack(alignment: .leading, spacing: 10) {
-            HStack {
-              Text(status.rawValue)
-                .font(.headline)
-              Spacer(minLength: 8)
-              Text("\(items.count)/\(limit)")
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(items.count > limit ? Color.red.opacity(0.25) : Color.white.opacity(0.12))
-                .clipShape(Capsule())
-            }
-
-            if items.isEmpty {
-              Text("No stage")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, minHeight: 60)
-            } else {
-              VStack(spacing: 10) {
-                ForEach(items) { stage in
-                  StageCardView(
-                    stage: stage,
-                    limitExceeded: items.count > limit,
-                    onStatusChange: { newStatus in
-                      Task { await stageStore.updateStageStatus(stageID: stage.id, to: newStatus) }
-                    },
-                    onDelete: {
-                      stageStore.deleteStage(stageID: stage.id)
-                    }
-                  )
-                }
-              }
-            }
-          }
-          .padding(12)
-          .frame(width: 310, alignment: .top)
-          .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-              .fill(Color.white.opacity(0.08))
-          )
-          .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-              .stroke(Color.white.opacity(0.15), lineWidth: 1)
-          )
-        }
-      }
-      .padding(16)
     }
   }
 }

@@ -4,6 +4,7 @@ import SwiftUI
 final class AppContainer: ObservableObject {
   let diagnosticsStore: DiagnosticsStore
   let configStore: ConfigStore
+  let updateStore: UpdateStore
   let googleAuthStore: GoogleAuthStore
   let notificationScheduler: NotificationScheduler
   let focusStore: FocusStore
@@ -16,6 +17,7 @@ final class AppContainer: ObservableObject {
     self.diagnosticsStore = diagnostics
     let config = ConfigStore()
     self.configStore = config
+    self.updateStore = UpdateStore(diagnostics: diagnostics)
     let auth = GoogleAuthStore(configStore: config, diagnostics: diagnostics)
     self.googleAuthStore = auth
     let focus = FocusStore(configStore: config, diagnostics: diagnostics)

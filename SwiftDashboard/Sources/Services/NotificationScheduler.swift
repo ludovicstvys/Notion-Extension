@@ -19,14 +19,62 @@ private enum NotificationCategoryID {
   static let calendarEvent = "CALENDAR_EVENT_CATEGORY"
 }
 
+private struct NotificationEventPayload: Sendable {
+  var eventID: String
+  var summary: String
+  var startISO: String
+  var sourceURL: String
+  var meetingLink: String
+
+  init(event: CalendarEvent) {
+    eventID = event.id
+    summary = event.summary
+    startISO = event.start.iso8601String
+    sourceURL = event.sourceUrl
+    meetingLink = event.meetingLink
+  }
+
+  init(userInfo: [AnyHashable: Any]) {
+    eventID = userInfo["eventID"] as? String ?? ""
+    summary = userInfo["summary"] as? String ?? ""
+    startISO = userInfo["startISO"] as? String ?? ""
+    sourceURL = userInfo["sourceUrl"] as? String ?? ""
+    meetingLink = userInfo["meetingLink"] as? String ?? ""
+  }
+
+  var userInfo: [String: String] {
+    [
+      "eventID": eventID,
+      "summary": summary,
+      "startISO": startISO,
+      "sourceUrl": sourceURL,
+      "meetingLink": meetingLink,
+    ]
+  }
+}
+
+private struct ScheduledReminderCandidate {
+  var identifier: String
+  var event: CalendarEvent
+  var offset: Int
+  var fireDate: Date
+
+  var signatureFragment: String {
+    "\(identifier)|\(Int(fireDate.timeIntervalSince1970))"
+  }
+}
+
 @MainActor
 final class NotificationScheduler: NSObject, ObservableObject {
   @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
   @Published var lastStatusMessage: String = ""
 
   private let center = UNUserNotificationCenter.current()
+  private let reminderHorizon: TimeInterval = 30 * 24 * 60 * 60
+  private let maxPendingEventReminders = 48
   private weak var diagnostics: DiagnosticsStore?
   private weak var focusStore: FocusStore?
+  private var lastScheduledSignature: String = ""
 
   init(diagnostics: DiagnosticsStore?, focusStore: FocusStore? = nil) {
     self.diagnostics = diagnostics
@@ -65,51 +113,75 @@ final class NotificationScheduler: NSObject, ObservableObject {
       return
     }
 
-    await removeEventNotifications()
-
     let now = Date()
-    var scheduled = 0
+    let horizon = now.addingTimeInterval(reminderHorizon)
+    var candidates: [ScheduledReminderCandidate] = []
     for event in events {
       let offsets = prefs.offsets(for: event.eventType)
       for offset in offsets {
         let fireDate = event.start.addingTimeInterval(TimeInterval(-offset * 60))
-        if fireDate <= now { continue }
+        if fireDate <= now || fireDate > horizon { continue }
         let id = "event|\(event.id)|m\(offset)"
-        let content = UNMutableNotificationContent()
-        content.title = offset >= 60 ? "Event in \(offset / 60)h" : "Event soon"
-        content.body = "\(event.summary) (\(event.whenText))"
-        content.sound = .default
-        content.categoryIdentifier = NotificationCategoryID.calendarEvent
-        content.userInfo = [
-          "eventID": event.id,
-          "summary": event.summary,
-          "startISO": event.start.iso8601String,
-          "sourceUrl": event.sourceUrl,
-          "meetingLink": event.meetingLink,
-        ]
-        let trigger = UNCalendarNotificationTrigger(
-          dateMatching: Calendar.current.dateComponents(
-            [.year, .month, .day, .hour, .minute, .second],
-            from: fireDate
-          ),
-          repeats: false
-        )
-        let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
-        do {
-          try await center.add(request)
-          scheduled += 1
-        } catch {
-          diagnostics?.log(
-            severity: .warning,
-            category: "notifications",
-            message: "Unable to schedule reminder.",
-            metadata: ["eventID": event.id, "error": error.localizedDescription]
+        candidates.append(
+          ScheduledReminderCandidate(
+            identifier: id,
+            event: event,
+            offset: offset,
+            fireDate: fireDate
           )
-        }
+        )
       }
     }
 
-    lastStatusMessage = "Scheduled \(scheduled) reminder(s)."
+    candidates.sort { $0.fireDate < $1.fireDate }
+    if candidates.count > maxPendingEventReminders {
+      candidates = Array(candidates.prefix(maxPendingEventReminders))
+    }
+
+    let signature = candidates.map(\.signatureFragment).joined(separator: "||")
+    guard signature != lastScheduledSignature else {
+      lastStatusMessage = "Reminders unchanged."
+      return
+    }
+
+    await removeEventNotifications()
+
+    var scheduled = 0
+    for candidate in candidates {
+      let payload = NotificationEventPayload(event: candidate.event)
+      let offset = candidate.offset
+      let event = candidate.event
+      let fireDate = candidate.fireDate
+      let id = candidate.identifier
+      let content = UNMutableNotificationContent()
+      content.title = offset >= 60 ? "Event in \(offset / 60)h" : "Event soon"
+      content.body = "\(event.summary) (\(event.whenText))"
+      content.sound = .default
+      content.categoryIdentifier = NotificationCategoryID.calendarEvent
+      content.userInfo = payload.userInfo
+      let trigger = UNCalendarNotificationTrigger(
+        dateMatching: Calendar.current.dateComponents(
+          [.year, .month, .day, .hour, .minute, .second],
+          from: fireDate
+        ),
+        repeats: false
+      )
+      let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+      do {
+        try await center.add(request)
+        scheduled += 1
+      } catch {
+        diagnostics?.log(
+          severity: .warning,
+          category: "notifications",
+          message: "Unable to schedule reminder.",
+          metadata: ["eventID": event.id, "error": error.localizedDescription]
+        )
+      }
+    }
+
+    lastScheduledSignature = signature
+    lastStatusMessage = scheduled == 0 ? "No reminder scheduled." : "Scheduled \(scheduled) reminder(s)."
     diagnostics?.log(category: "notifications", message: lastStatusMessage)
   }
 
@@ -119,6 +191,7 @@ final class NotificationScheduler: NSObject, ObservableObject {
       .map(\.identifier)
       .filter { $0.hasPrefix("event|") || $0.hasPrefix("snooze|") }
     center.removePendingNotificationRequests(withIdentifiers: ids)
+    lastScheduledSignature = ""
   }
 
   func refreshAuthorizationStatus() async {
@@ -158,15 +231,15 @@ final class NotificationScheduler: NSObject, ObservableObject {
     center.setNotificationCategories([category])
   }
 
-  private func scheduleSnooze(from userInfo: [AnyHashable: Any], minutes: Int) async {
-    guard let title = userInfo["summary"] as? String else { return }
+  private func scheduleSnooze(from payload: NotificationEventPayload, minutes: Int) async {
+    guard !payload.summary.isEmpty else { return }
     let id = "snooze|\(UUID().uuidString)"
     let content = UNMutableNotificationContent()
     content.title = "Reminder"
-    content.body = title
+    content.body = payload.summary
     content.sound = .default
     content.categoryIdentifier = NotificationCategoryID.calendarEvent
-    content.userInfo = userInfo
+    content.userInfo = payload.userInfo
 
     let trigger = UNTimeIntervalNotificationTrigger(timeInterval: TimeInterval(minutes * 60), repeats: false)
     let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
@@ -187,10 +260,8 @@ final class NotificationScheduler: NSObject, ObservableObject {
     }
   }
 
-  private func openEventLink(from userInfo: [AnyHashable: Any]) {
-    let meeting = (userInfo["meetingLink"] as? String) ?? ""
-    let source = (userInfo["sourceUrl"] as? String) ?? ""
-    let target = meeting.isEmpty ? source : meeting
+  private func openEventLink(using payload: NotificationEventPayload) {
+    let target = payload.meetingLink.isEmpty ? payload.sourceURL : payload.meetingLink
     guard let url = URL(string: target), !target.isEmpty else { return }
     if let focusStore, focusStore.isBlocked(url: url) {
       diagnostics?.log(
@@ -221,17 +292,17 @@ extension NotificationScheduler: UNUserNotificationCenterDelegate {
     _ center: UNUserNotificationCenter,
     didReceive response: UNNotificationResponse
   ) async {
-    let userInfo = response.notification.request.content.userInfo
+    let payload = NotificationEventPayload(userInfo: response.notification.request.content.userInfo)
     switch response.actionIdentifier {
     case NotificationActionID.snooze15:
-      await scheduleSnooze(from: userInfo, minutes: 15)
+      await scheduleSnooze(from: payload, minutes: 15)
     case NotificationActionID.snooze60:
-      await scheduleSnooze(from: userInfo, minutes: 60)
+      await scheduleSnooze(from: payload, minutes: 60)
     case NotificationActionID.snoozeTomorrow:
-      await scheduleSnooze(from: userInfo, minutes: 24 * 60)
+      await scheduleSnooze(from: payload, minutes: 24 * 60)
     case NotificationActionID.openLink, UNNotificationDefaultActionIdentifier:
       await MainActor.run {
-        self.openEventLink(from: userInfo)
+        self.openEventLink(using: payload)
       }
     default:
       break

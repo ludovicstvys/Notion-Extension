@@ -88,12 +88,14 @@ final class FocusStore: ObservableObject {
   private func runTimer() {
     timer?.invalidate()
     timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-      guard let self else { return }
-      guard self.remainingSeconds > 0 else {
-        self.advancePhase()
-        return
+      Task { @MainActor [weak self] in
+        guard let self else { return }
+        guard self.remainingSeconds > 0 else {
+          self.advancePhase()
+          return
+        }
+        self.remainingSeconds -= 1
       }
-      self.remainingSeconds -= 1
     }
   }
 

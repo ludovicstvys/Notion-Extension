@@ -16,12 +16,19 @@ targets:
     info:
       path: Config/iOS-Info.plist
       properties:
-        CFBundleDisplayName: Notion Dashboard
+        CFBundleDisplayName: Dashboard
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleURLTypes:
+          - CFBundleURLName: notiondashboard.oauth
+            CFBundleURLSchemes:
+              - com.googleusercontent.apps.608348086080-dp8647muci5st4em00pdgvrba75jq3db
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
     settings:
       base:
+        PRODUCT_NAME: Dashboard
         PRODUCT_BUNDLE_IDENTIFIER: com.loldashboard.notiondashboard.ios
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
   NotionDashboard-macOS:
@@ -33,9 +40,19 @@ targets:
     info:
       path: Config/macOS-Info.plist
       properties:
-        CFBundleDisplayName: Notion Dashboard
+        CFBundleDisplayName: Dashboard
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleURLTypes:
+          - CFBundleURLName: notiondashboard.oauth
+            CFBundleURLSchemes:
+              - com.googleusercontent.apps.608348086080-dp8647muci5st4em00pdgvrba75jq3db
         LSMinimumSystemVersion: "13.0"
+        UpdateChannel: dev
+        UpdateManifestURL: https://ludovicstvys.github.io/Notion-Extension/update-dev.json
     settings:
       base:
+        PRODUCT_NAME: Dashboard
         PRODUCT_BUNDLE_IDENTIFIER: com.loldashboard.notiondashboard.macos
         CODE_SIGN_STYLE: Automatic
+        OTHER_LDFLAGS: $(inherited) -weak_framework AppIntents

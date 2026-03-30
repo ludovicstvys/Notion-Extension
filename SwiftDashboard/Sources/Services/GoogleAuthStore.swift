@@ -302,19 +302,21 @@ final class GoogleAuthStore: NSObject, ObservableObject {
 
 extension GoogleAuthStore: ASWebAuthenticationPresentationContextProviding {
   nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+    MainActor.assumeIsolated {
 #if os(iOS)
-    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-    let keyWindow = scenes.flatMap(\.windows).first { $0.isKeyWindow }
-    return keyWindow ?? ASPresentationAnchor(frame: .zero)
+      let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+      let keyWindow = scenes.flatMap(\.windows).first { $0.isKeyWindow }
+      return keyWindow ?? ASPresentationAnchor(frame: .zero)
 #elseif os(macOS)
-    return NSApplication.shared.windows.first { $0.isKeyWindow } ??
-      ASPresentationAnchor(
-        contentRect: .init(x: 0, y: 0, width: 1, height: 1),
-        styleMask: [.titled],
-        backing: .buffered,
-        defer: false
-      )
+      return NSApplication.shared.windows.first { $0.isKeyWindow } ??
+        ASPresentationAnchor(
+          contentRect: .init(x: 0, y: 0, width: 1, height: 1),
+          styleMask: [.titled],
+          backing: .buffered,
+          defer: false
+        )
 #endif
+    }
   }
 }
 

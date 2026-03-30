@@ -78,13 +78,15 @@ struct NotionStatusMap: Codable, Hashable {
 }
 
 struct AppConfig: Codable, Hashable {
+  static let defaultGoogleOAuthClientID = "608348086080-dp8647muci5st4em00pdgvrba75jq3db.apps.googleusercontent.com"
+
   var notionToken: String = ""
   var notionDbId: String = ""
   var notionTodoDbId: String = ""
   var bdfApiKey: String = ""
   var googlePlacesApiKey: String = ""
-  var googleOAuthClientID: String = "608348086080-dp8647muci5st4em00pdgvrba75jq3db.apps.googleusercontent.com"
-  var googleOAuthRedirectURI: String = "notiondash://oauth2redirect"
+  var googleOAuthClientID: String = AppConfig.defaultGoogleOAuthClientID
+  var googleOAuthRedirectURI: String = AppConfig.recommendedGoogleOAuthRedirectURI(for: AppConfig.defaultGoogleOAuthClientID)
   var googleOAuthScopes: [String] = [
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/calendar.events",
@@ -119,6 +121,28 @@ struct AppConfig: Codable, Hashable {
   init() {}
 
   static var defaults: AppConfig { .init() }
+
+  static func recommendedGoogleOAuthScheme(for clientID: String) -> String? {
+    let trimmed = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+    let suffix = ".apps.googleusercontent.com"
+    guard trimmed.hasSuffix(suffix) else { return nil }
+    let prefix = String(trimmed.dropLast(suffix.count))
+    guard !prefix.isEmpty else { return nil }
+    return "com.googleusercontent.apps.\(prefix)"
+  }
+
+  static func recommendedGoogleOAuthRedirectURI(for clientID: String) -> String {
+    guard let scheme = recommendedGoogleOAuthScheme(for: clientID) else {
+      return ""
+    }
+    return "\(scheme):/oauth2redirect"
+  }
+
+  static func usesManagedGoogleOAuthRedirectURI(_ redirectURI: String, clientID: String) -> Bool {
+    let trimmed = redirectURI.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ||
+      trimmed == recommendedGoogleOAuthRedirectURI(for: clientID)
+  }
 
   var hasNotionCredentials: Bool {
     !notionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -170,9 +194,9 @@ struct AppConfig: Codable, Hashable {
     notionTodoDbId = try c.decodeIfPresent(String.self, forKey: .notionTodoDbId) ?? ""
     bdfApiKey = try c.decodeIfPresent(String.self, forKey: .bdfApiKey) ?? ""
     googlePlacesApiKey = try c.decodeIfPresent(String.self, forKey: .googlePlacesApiKey) ?? ""
-    googleOAuthClientID = try c.decodeIfPresent(String.self, forKey: .googleOAuthClientID) ??
-      "608348086080-dp8647muci5st4em00pdgvrba75jq3db.apps.googleusercontent.com"
-    googleOAuthRedirectURI = try c.decodeIfPresent(String.self, forKey: .googleOAuthRedirectURI) ?? "notiondash://oauth2redirect"
+    googleOAuthClientID = try c.decodeIfPresent(String.self, forKey: .googleOAuthClientID) ?? AppConfig.defaultGoogleOAuthClientID
+    googleOAuthRedirectURI = try c.decodeIfPresent(String.self, forKey: .googleOAuthRedirectURI) ??
+      AppConfig.recommendedGoogleOAuthRedirectURI(for: googleOAuthClientID)
     googleOAuthScopes = try c.decodeIfPresent([String].self, forKey: .googleOAuthScopes) ?? [
       "https://www.googleapis.com/auth/calendar.readonly",
       "https://www.googleapis.com/auth/calendar.events",
@@ -504,7 +528,7 @@ struct PipelineImportPreview: Hashable {
   var source: String
 }
 
-struct GoogleCalendarDescriptor: Identifiable, Hashable {
+struct GoogleCalendarDescriptor: Identifiable, Codable, Hashable {
   var id: String
   var name: String
   var isPrimary: Bool

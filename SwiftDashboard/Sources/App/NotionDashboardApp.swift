@@ -9,6 +9,7 @@ struct NotionDashboardApp: App {
       RootView()
         .environmentObject(container.diagnosticsStore)
         .environmentObject(container.configStore)
+        .environmentObject(container.updateStore)
         .environmentObject(container.googleAuthStore)
         .environmentObject(container.notificationScheduler)
         .environmentObject(container.focusStore)
@@ -16,5 +17,15 @@ struct NotionDashboardApp: App {
         .environmentObject(container.calendarStore)
         .environmentObject(container.marketNewsStore)
     }
+#if os(macOS)
+    .commands {
+      CommandGroup(after: .appInfo) {
+        Button("Check for Updates…") {
+          Task { await container.updateStore.checkForUpdates(userInitiated: true) }
+        }
+        .keyboardShortcut("u")
+      }
+    }
+#endif
   }
 }

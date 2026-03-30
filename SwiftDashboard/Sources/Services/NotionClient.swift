@@ -77,7 +77,7 @@ struct NotionClient {
     guard !token.isEmpty else { throw NotionClientError.missingCredentials }
     guard !dbID.isEmpty else { throw NotionClientError.invalidDatabaseID }
 
-    let pages = try await queryDatabasePages(token: token, databaseID: dbID, limit: 300)
+    let pages = try await queryDatabasePages(token: token, databaseID: dbID, limit: nil)
     return pages.compactMap { parseStage(from: $0, config: config) }
       .sorted { $0.updatedAt > $1.updatedAt }
   }
@@ -88,7 +88,7 @@ struct NotionClient {
     guard !token.isEmpty else { throw NotionClientError.missingCredentials }
     guard !dbID.isEmpty else { throw NotionClientError.invalidDatabaseID }
 
-    let pages = try await queryDatabasePages(token: token, databaseID: dbID, limit: 300)
+    let pages = try await queryDatabasePages(token: token, databaseID: dbID, limit: nil)
     let parsed = pages.compactMap { parseStage(from: $0, config: config) }
     let existing = parsed.first(where: { isDuplicate($0, stage) })
 
@@ -250,13 +250,14 @@ struct NotionClient {
   private func queryDatabasePages(
     token: String,
     databaseID: String,
-    limit: Int
+    limit: Int?
   ) async throws -> [[String: Any]] {
     var rows: [[String: Any]] = []
     var cursor: String? = nil
 
-    while rows.count < limit {
-      var body: [String: Any] = ["page_size": min(100, limit - rows.count)]
+    while limit.map({ rows.count < $0 }) ?? true {
+      let pageSize = limit.map { min(100, max(1, $0 - rows.count)) } ?? 100
+      var body: [String: Any] = ["page_size": pageSize]
       if let cursor {
         body["start_cursor"] = cursor
       }
@@ -279,7 +280,10 @@ struct NotionClient {
       cursor = nextCursor
     }
 
-    return Array(rows.prefix(limit))
+    if let limit {
+      return Array(rows.prefix(limit))
+    }
+    return rows
   }
 
   private func parseStage(from page: [String: Any], config: AppConfig) -> Stage? {

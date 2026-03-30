@@ -3,15 +3,23 @@ import SwiftUI
 
 @MainActor
 final class StageStore: ObservableObject {
+  private enum NotionSyncTrigger {
+    case manual
+    case launch
+  }
+
   @Published private(set) var stages: [Stage] = []
   @Published private(set) var todos: [TodoItem] = []
   @Published private(set) var pendingOperations: [PendingNotionOperation] = []
   @Published var isSyncingNotion: Bool = false
   @Published var syncMessage: String = ""
+  @Published private(set) var lastSuccessfulNotionSyncDate: Date?
 
   private let stagesStorageKey = "swift_notion_dashboard_stages_v1"
   private let todosStorageKey = "swift_notion_dashboard_todos_v1"
   private let queueStorageKey = "swift_notion_dashboard_notion_queue_v1"
+  private let lastSuccessfulSyncDateKey = "swift_notion_dashboard_notion_last_successful_sync_v1"
+  private let launchSyncStaleInterval: TimeInterval = 15 * 60
   private let defaults: UserDefaults
   private let encoder: JSONEncoder
   private let decoder: JSONDecoder
@@ -40,6 +48,13 @@ final class StageStore: ObservableObject {
     self.decoder = decoder
 
     load()
+  }
+
+  func prepareForLaunch() async {
+    guard let configStore else { return }
+    guard configStore.config.hasNotionCredentials else { return }
+    guard shouldSyncAtLaunch else { return }
+    await syncFromNotion(trigger: .launch)
   }
 
   func addStage(draft: StageDraft) async {
@@ -126,20 +141,38 @@ final class StageStore: ObservableObject {
   }
 
   func syncFromNotion() async {
+    await syncFromNotion(trigger: .manual)
+  }
+
+  private func syncFromNotion(trigger: NotionSyncTrigger) async {
     guard let configStore else { return }
     guard configStore.config.hasNotionCredentials else {
-      syncMessage = "Missing Notion token/database config."
+      if trigger == .manual {
+        syncMessage = "Missing Notion token/database config."
+      }
       return
     }
+    guard !isSyncingNotion else { return }
+
     isSyncingNotion = true
     defer { isSyncingNotion = false }
+
+    if trigger == .manual {
+      syncMessage = "Syncing all Notion stages..."
+    }
 
     await flushPendingOperations()
 
     do {
       let remoteStages = try await notionClient.fetchStages(config: configStore.config)
+      let completedAt = Date()
+      lastSuccessfulNotionSyncDate = completedAt
+      persistSyncMetadata()
+
       if remoteStages.isEmpty {
-        syncMessage = "Notion sync done (0 stage)."
+        if trigger == .manual {
+          syncMessage = "Notion sync done (0 stage)."
+        }
         return
       }
 
@@ -148,14 +181,25 @@ final class StageStore: ObservableObject {
       }
       stages.sort { $0.updatedAt > $1.updatedAt }
       persist()
-      syncMessage = "Notion sync done (\(remoteStages.count) stages)."
-      diagnostics?.log(category: "notion-sync", message: syncMessage)
+      let message = "Notion sync done (\(remoteStages.count) stages)."
+      if trigger == .manual {
+        syncMessage = message
+      }
+      diagnostics?.log(
+        category: "notion-sync",
+        message: message,
+        metadata: ["trigger": trigger == .manual ? "manual" : "launch"]
+      )
     } catch {
-      syncMessage = "Notion sync failed: \(error.localizedDescription)"
+      let message = "Notion sync failed: \(error.localizedDescription)"
+      if trigger == .manual || stages.isEmpty {
+        syncMessage = message
+      }
       diagnostics?.log(
         severity: .error,
         category: "notion-sync",
-        message: syncMessage
+        message: message,
+        metadata: ["trigger": trigger == .manual ? "manual" : "launch"]
       )
     }
   }
@@ -166,44 +210,38 @@ final class StageStore: ObservableObject {
       syncMessage = "Missing Notion token/database config."
       return
     }
+    guard !isSyncingNotion else { return }
+
     isSyncingNotion = true
     defer { isSyncingNotion = false }
 
     await flushPendingOperations()
 
-    do {
-      for stage in stages {
-        do {
-          try await notionClient.upsertStage(stage, config: configStore.config)
-        } catch {
-          enqueue(
-            PendingNotionOperation(
-              kind: .upsertStage,
-              stage: stage,
-              stageID: stage.id,
-              status: nil,
-              createdAt: Date(),
-              retryCount: 0
-            )
+    for stage in stages {
+      do {
+        try await notionClient.upsertStage(stage, config: configStore.config)
+      } catch {
+        enqueue(
+          PendingNotionOperation(
+            kind: .upsertStage,
+            stage: stage,
+            stageID: stage.id,
+            status: nil,
+            createdAt: Date(),
+            retryCount: 0
           )
-          diagnostics?.log(
-            severity: .warning,
-            category: "notion-queue",
-            message: "Queued stage upsert during push.",
-            metadata: ["stageID": stage.id, "error": error.localizedDescription]
-          )
-        }
+        )
+        diagnostics?.log(
+          severity: .warning,
+          category: "notion-queue",
+          message: "Queued stage upsert during push.",
+          metadata: ["stageID": stage.id, "error": error.localizedDescription]
+        )
       }
-      syncMessage = "Push to Notion done (\(stages.count) stages, queue: \(pendingOperations.count))."
-      diagnostics?.log(category: "notion-push", message: syncMessage)
-    } catch {
-      syncMessage = "Push to Notion failed: \(error.localizedDescription)"
-      diagnostics?.log(
-        severity: .error,
-        category: "notion-push",
-        message: syncMessage
-      )
     }
+
+    syncMessage = "Push to Notion done (\(stages.count) stages, queue: \(pendingOperations.count))."
+    diagnostics?.log(category: "notion-push", message: syncMessage)
   }
 
   func flushPendingOperations() async {
@@ -557,6 +595,7 @@ final class StageStore: ObservableObject {
   }
 
   private func load() {
+    lastSuccessfulNotionSyncDate = defaults.object(forKey: lastSuccessfulSyncDateKey) as? Date
     if
       let data = defaults.data(forKey: stagesStorageKey),
       let decoded = try? decoder.decode([Stage].self, from: data)
@@ -587,6 +626,23 @@ final class StageStore: ObservableObject {
     if let queueData = try? encoder.encode(pendingOperations) {
       defaults.set(queueData, forKey: queueStorageKey)
     }
+  }
+
+  private var shouldSyncAtLaunch: Bool {
+    if !pendingOperations.isEmpty {
+      return true
+    }
+    if stages.isEmpty {
+      return true
+    }
+    guard let lastSuccessfulNotionSyncDate else {
+      return true
+    }
+    return Date().timeIntervalSince(lastSuccessfulNotionSyncDate) >= launchSyncStaleInterval
+  }
+
+  private func persistSyncMetadata() {
+    defaults.set(lastSuccessfulNotionSyncDate, forKey: lastSuccessfulSyncDateKey)
   }
 
   private func enqueue(_ operation: PendingNotionOperation) {

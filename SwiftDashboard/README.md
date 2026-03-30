@@ -45,7 +45,7 @@ This folder contains a full SwiftUI app scaffolded for both iOS and macOS.
 ## Google OAuth setup
 
 1. In Google Cloud Console, create an OAuth client for installed apps.
-2. Add redirect URI scheme used by the app: `notiondash://oauth2redirect`.
+2. Add the app callback used by the current client ID: `com.googleusercontent.apps.608348086080-dp8647muci5st4em00pdgvrba75jq3db:/oauth2redirect`.
 3. In Settings tab, set:
    - `Google OAuth client ID`
    - `Google OAuth redirect URI`

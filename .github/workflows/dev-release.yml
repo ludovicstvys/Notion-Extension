@@ -1,0 +1,116 @@
+name: Dev Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: dev-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: macos-14
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      build: ${{ steps.metadata.outputs.build }}
+      tag: ${{ steps.metadata.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build DMG
+        env:
+          CURRENT_PROJECT_VERSION_OVERRIDE: ${{ github.run_number }}
+          DERIVED_DATA_PATH: /tmp/NotionDashboardDerivedData
+          APP_PRODUCT_NAME: Dashboard
+        run: ./build-dmg.sh
+
+      - name: Read build metadata
+        id: metadata
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          APP_PLIST="/tmp/NotionDashboardDerivedData/Build/Products/Release/Dashboard.app/Contents/Info.plist"
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PLIST")"
+          BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PLIST")"
+          MIN_SYSTEM="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP_PLIST")"
+          TAG="v${VERSION}-dev.${BUILD}"
+          PAGES_BASE_URL="https://${REPO_OWNER}.github.io/${REPO_NAME}"
+          RELEASE_NOTES_PATH="releases/${TAG}.html"
+          RELEASE_NOTES_URL="${PAGES_BASE_URL}/${RELEASE_NOTES_PATH}"
+          DOWNLOAD_URL="https://github.com/${REPOSITORY}/releases/download/${TAG}/NotionDashboard.dmg"
+          PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          COMMIT_SHA="$(git rev-parse --short HEAD)"
+          COMMIT_MESSAGE="$(git log -1 --pretty=%s)"
+          {
+            echo "version=${VERSION}"
+            echo "build=${BUILD}"
+            echo "minimum_system_version=${MIN_SYSTEM}"
+            echo "tag=${TAG}"
+            echo "pages_base_url=${PAGES_BASE_URL}"
+            echo "release_notes_path=${RELEASE_NOTES_PATH}"
+            echo "release_notes_url=${RELEASE_NOTES_URL}"
+            echo "download_url=${DOWNLOAD_URL}"
+            echo "published_at=${PUBLISHED_AT}"
+            echo "commit_sha=${COMMIT_SHA}"
+            echo "commit_message=${COMMIT_MESSAGE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.metadata.outputs.tag }}
+          name: Dev build ${{ steps.metadata.outputs.version }} (${{ steps.metadata.outputs.build }})
+          prerelease: true
+          make_latest: false
+          generate_release_notes: true
+          files: NotionDashboard.dmg
+          fail_on_unmatched_files: true
+
+      - name: Generate update site
+        env:
+          UPDATE_CHANNEL: dev
+          UPDATE_VERSION: ${{ steps.metadata.outputs.version }}
+          UPDATE_BUILD: ${{ steps.metadata.outputs.build }}
+          UPDATE_MINIMUM_SYSTEM_VERSION: ${{ steps.metadata.outputs.minimum_system_version }}
+          UPDATE_PUBLISHED_AT: ${{ steps.metadata.outputs.published_at }}
+          UPDATE_DOWNLOAD_URL: ${{ steps.metadata.outputs.download_url }}
+          UPDATE_RELEASE_NOTES_URL: ${{ steps.metadata.outputs.release_notes_url }}
+          UPDATE_RELEASE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.metadata.outputs.tag }}
+          UPDATE_COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
+          UPDATE_COMMIT_MESSAGE: ${{ steps.metadata.outputs.commit_message }}
+        run: |
+          mkdir -p build/update-site/releases
+          ./packaging/generate-update-manifest.sh build/update-site/update-dev.json
+          ./packaging/generate-release-notes-page.sh build/update-site/${{ steps.metadata.outputs.release_notes_path }}
+          touch build/update-site/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/update-site
+
+  deploy-pages:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
