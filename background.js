@@ -17,15 +17,28 @@ const GCAL_NOTIFIED_KEY = "gcalNotified";
 const GCAL_NOTIFY_WINDOW_MIN = 10;
 const GCAL_CACHE_KEY = "gcalEventCache";
 const GCAL_CACHE_TTL_MS = 5 * 60 * 1000;
+const GCAL_CACHE_MAX_BUCKETS = 6;
+const GCAL_CACHE_FALLBACK_BUCKETS = 2;
+const GCAL_CACHE_MAX_EVENTS_PER_BUCKET = 180;
+const GCAL_CACHE_FALLBACK_EVENTS_PER_BUCKET = 60;
 const GCAL_REMINDER_PREFS_KEY = "gcalReminderPrefs";
 const GCAL_SNOOZE_ALARM_PREFIX = "gcal-snooze|";
+const GCAL_EVENT_MAP_MAX_ENTRIES = 500;
+const GCAL_EVENT_MAP_FALLBACK_ENTRIES = 180;
+const GCAL_NOTIFIED_MAX_ENTRIES = 400;
+const GCAL_NOTIFIED_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 const YAHOO_NEWS_ALARM = "yahoo-news-sync";
 const YAHOO_NEWS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline";
 const YAHOO_NEWS_CACHE_MIN = 15;
+const YAHOO_NEWS_MAX_ITEMS = 25;
 const TAG_RULES_KEY = "autoTagRules";
 const NOTION_SYNC_ALARM = "notion-calendar-sync";
 const NOTION_SYNC_KEY = "notionCalendarSyncEnabled";
 const NOTION_SYNC_MAP = "notionCalendarMap";
+const NOTION_SYNC_LOOKBACK_DAYS = 45;
+const NOTION_SYNC_LOOKAHEAD_DAYS = 400;
+const NOTION_SYNC_MAP_MAX_ENTRIES = 2000;
+const NOTION_SYNC_MAP_FALLBACK_ENTRIES = 700;
 const DEADLINE_PREFS_KEY = "deadlinePrefs";
 const DEADLINE_ALARM_PREFIX = "deadline|";
 const INTERVIEW_ALARM_PREFIX = "interview|";
@@ -36,6 +49,7 @@ const NOTION_QUEUE_RETRY_BASE_MS = 15 * 1000;
 const NOTION_QUEUE_RETRY_MAX_MS = 15 * 60 * 1000;
 const YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const YAHOO_QUOTE_CACHE_MIN = 5;
+const YAHOO_QUOTES_MAX_SYMBOLS = 32;
 const ECB_FR10Y_URL =
   "https://webstat.banque-france.fr/api/explore/v2.1/catalog/datasets/observations/exports/json/?where=series_key+IN+%28%22FM.D.FR.EUR.FR2.BB.FRMOYTEC10.HSTA%22%29&order_by=-time_period_start";
 const ECB_CACHE_KEY = "ecbFr10yCache";
@@ -48,6 +62,8 @@ const STAGE_DASHBOARD_SNAPSHOT_KEY = "stageDashboardSnapshot";
 const STAGE_SCHEMA_CACHE_KEY = "stageSchemaCache";
 const STAGE_DASHBOARD_TTL_MS = 90 * 1000;
 const STAGE_SCHEMA_TTL_MS = 60 * 60 * 1000;
+const STAGE_SNAPSHOT_MAX_CACHED_ROWS = 400;
+const STAGE_SNAPSHOT_FALLBACK_ROWS = 120;
 const STAGE_DATA_SYNC_ALARM = "stage-data-sync";
 const STAGE_SLA_OPEN_DAYS = 7;
 const STAGE_SLA_APPLIED_DAYS = 10;
@@ -61,6 +77,7 @@ const URL_BLOCKER_ENABLED_KEY = "urlBlockerEnabled";
 const URL_BLOCKER_LOGS_KEY = "urlBlockerLogs";
 const URL_BLOCKER_BASE_ID = 9000;
 const URL_BLOCKER_LOG_LIMIT = 80;
+const ALARM_STORAGE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 
 let stageSnapshotInFlight = null;
 let stageSnapshotRefreshTimer = null;
@@ -152,6 +169,9 @@ function classifyError(rawMessage, status) {
   if (status === 401 || status === 403) return "AUTH_REQUIRED";
   if (status === 404) return "HTTP_404";
   if (status && status >= 500) return "HTTP_5XX";
+  if (/resource::kquotabytes|quota[_ ]?bytes|quota exceeded/i.test(msg)) {
+    return "STORAGE_QUOTA_EXCEEDED";
+  }
   if (
     /failed to fetch|networkerror|fetch failed|net::|network request failed/i.test(
       rawMessage || ""
@@ -213,6 +233,8 @@ function friendlyMessage(code, fallback) {
       return "Trop de requetes (429). Reessaie dans quelques instants.";
     case "HTTP_5XX":
       return "Service indisponible cote serveur. Reessaie plus tard.";
+    case "STORAGE_QUOTA_EXCEEDED":
+      return "Stockage local de l'extension plein. Le cache est trop volumineux.";
     default:
       return fallback || "Une erreur inconnue est survenue.";
   }
@@ -247,7 +269,11 @@ async function recordDiagnosticError(entry) {
   const { [DIAG_ERRORS_KEY]: stored } = await chrome.storage.local.get([DIAG_ERRORS_KEY]);
   const list = Array.isArray(stored) ? stored : [];
   const next = [entry, ...list].slice(0, DIAG_ERRORS_LIMIT);
-  await chrome.storage.local.set({ [DIAG_ERRORS_KEY]: next });
+  try {
+    await setLocalWithQuotaGuard({ [DIAG_ERRORS_KEY]: next });
+  } catch (_) {
+    // Diagnostics are best-effort only.
+  }
 }
 
 async function recordDiagnosticSync(name, status, details) {
@@ -258,10 +284,14 @@ async function recordDiagnosticSync(name, status, details) {
     details: details || null,
     at: Date.now(),
   };
-  await chrome.storage.local.set({
-    [DIAG_SYNC_KEY]: stats,
-    [DIAG_LAST_SYNC_KEY]: Date.now(),
-  });
+  try {
+    await setLocalWithQuotaGuard({
+      [DIAG_SYNC_KEY]: stats,
+      [DIAG_LAST_SYNC_KEY]: Date.now(),
+    });
+  } catch (_) {
+    // Diagnostics are best-effort only.
+  }
 }
 
 function notifyUser(title, message, idPrefix = "diag") {
@@ -309,6 +339,34 @@ async function handleError(err, context, meta, options = {}) {
     // Ignore if the error object is not extensible.
   }
   return entry;
+}
+
+async function safeHandleError(err, context, meta, options = {}) {
+  try {
+    return await handleError(err, context, meta, options);
+  } catch (handlerErr) {
+    const entry = normalizeError(err, context, meta);
+    const handlerFailure = String(
+      handlerErr?.message || handlerErr || "Diagnostic error handling failed."
+    );
+    const metaDetails =
+      entry.meta && typeof entry.meta === "object" && !Array.isArray(entry.meta)
+        ? { ...entry.meta, errorHandlerFailure: handlerFailure }
+        : { errorHandlerFailure: handlerFailure };
+    const fallback = {
+      ...entry,
+      meta: metaDetails,
+    };
+    try {
+      console.error("[DiagErrorFallback]", fallback.context, fallback.code, fallback.rawMessage, {
+        handlerFailure,
+        meta: entry.meta || null,
+      });
+    } catch (_) {
+      // Ignore console failures.
+    }
+    return fallback;
+  }
 }
 
 async function safeFetch(url, options = {}, context = "fetch", allowStatuses = []) {
@@ -363,23 +421,35 @@ function respondWith(promise, sendResponse, context, options = {}) {
         } catch (_) {
           details = null;
         }
-        await recordDiagnosticSync(options.syncName, "ok", details);
+        try {
+          await recordDiagnosticSync(options.syncName, "ok", details);
+        } catch (_) {
+          // Diagnostics must never block the response channel.
+        }
       }
-      sendResponse(value);
+      try {
+        sendResponse(value);
+      } catch (_) {
+        // The sender may already be gone; do not crash the worker.
+      }
     })
     .catch(async (err) => {
-      const entry = await handleError(err, context, options.meta, {
+      const entry = await safeHandleError(err, context, options.meta, {
         notify: !!options.notify,
         syncName: options.syncName,
       });
-      sendResponse({
-        ok: false,
-        error: entry.message,
-        rawError: entry.rawMessage,
-        code: entry.code,
-        context: entry.context,
-        meta: entry.meta || null,
-      });
+      try {
+        sendResponse({
+          ok: false,
+          error: entry.message,
+          rawError: entry.rawMessage,
+          code: entry.code,
+          context: entry.context,
+          meta: entry.meta || null,
+        });
+      } catch (_) {
+        // The sender may already be gone; do not crash the worker.
+      }
     });
   return true;
 }
@@ -1117,8 +1187,15 @@ async function fetchYahooNews(params) {
         description: normalizeText(description),
       };
     });
-    const payload = { fetchedAt: Date.now(), items };
-    await chrome.storage.local.set({ yahooNews: payload });
+    const payload = compactYahooNewsPayload({ fetchedAt: Date.now(), items });
+    await setLocalWithQuotaGuard(
+      { yahooNews: payload },
+      {
+        retryPayload: () => ({
+          yahooNews: compactYahooNewsPayload(payload, Math.min(10, YAHOO_NEWS_MAX_ITEMS)),
+        }),
+      }
+    );
     await recordDiagnosticSync("yahooNews", "ok", { items: items.length });
     return payload;
   } catch (err) {
@@ -1193,8 +1270,15 @@ async function fetchYahooQuotes(symbols) {
         }
       })
     );
-    const payload = { fetchedAt: Date.now(), bySymbol };
-    await chrome.storage.local.set({ yahooQuotes: payload });
+    const payload = compactYahooQuotesPayload({ fetchedAt: Date.now(), bySymbol });
+    await setLocalWithQuotaGuard(
+      { yahooQuotes: payload },
+      {
+        retryPayload: () => ({
+          yahooQuotes: compactYahooQuotesPayload(payload, Math.min(8, YAHOO_QUOTES_MAX_SYMBOLS)),
+        }),
+      }
+    );
     await recordDiagnosticSync("yahooQuotes", "ok", {
       symbols: Object.keys(bySymbol).length,
     });
@@ -1503,6 +1587,7 @@ async function syncNotionToCalendar() {
     const rows = await listDbRows(token, normalizedDbId);
     const { [NOTION_SYNC_MAP]: storedMap } = await chrome.storage.local.get([NOTION_SYNC_MAP]);
     const syncMap = normalizeSyncMap(storedMap);
+    const syncWindow = buildNotionSyncWindowMs();
     let createdCount = 0;
     let updatedCount = 0;
 
@@ -1525,6 +1610,14 @@ async function syncNotionToCalendar() {
         "";
       const date = parseDateFromText(dateText);
       if (!date) continue;
+      if (!isDateWithinNotionSyncWindow(date, syncWindow)) {
+        const existing = syncMap.pages[r.id];
+        if (existing?.eventId) {
+          delete syncMap.events[existing.eventId];
+        }
+        delete syncMap.pages[r.id];
+        continue;
+      }
 
       const summary = [company, title].filter(Boolean).join(" - ") || "Stage";
       const description = `${url || ""}\nnotion:${r.id}`.trim();
@@ -1572,9 +1665,8 @@ async function syncNotionToCalendar() {
     }
 
     // Calendar -> Notion: update date if event changed.
-    const now = new Date();
-    const timeMin = toIsoStringLocal(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
-    const timeMax = toIsoStringLocal(new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000));
+    const timeMin = toIsoStringLocal(new Date(syncWindow.minMs));
+    const timeMax = toIsoStringLocal(new Date(syncWindow.maxMs));
     const events = await listCalendarEvents(calendarId, timeMin, timeMax, false);
     const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
     const closeDateKey = map.closeDate || map.openDate || map.startMonth || "Date de fermeture";
@@ -1604,7 +1696,15 @@ async function syncNotionToCalendar() {
       syncMap.events[ev.id] = pageId;
     }
 
-    await chrome.storage.local.set({ [NOTION_SYNC_MAP]: syncMap });
+    const compactSyncMap = compactNotionSyncMap(syncMap);
+    await setLocalWithQuotaGuard(
+      { [NOTION_SYNC_MAP]: compactSyncMap },
+      {
+        retryPayload: () => ({
+          [NOTION_SYNC_MAP]: compactNotionSyncMap(syncMap, { aggressive: true }),
+        }),
+      }
+    );
     await recordDiagnosticSync(syncName, "ok", {
       created: createdCount,
       updated: updatedCount,
@@ -1732,7 +1832,7 @@ async function scheduleEventAlerts(eventsByCalendar) {
         const alarmTime = start.getTime() - minutesBefore * 60 * 1000;
         if (alarmTime <= now) return;
         const alarmName = buildGcalAlarmName(eventKey, minutesBefore);
-        map[alarmName] = {
+        map[alarmName] = compactGcalAlarmEntry({
           calendarId,
           calendarSummary,
           eventId: ev.id,
@@ -1741,13 +1841,21 @@ async function scheduleEventAlerts(eventsByCalendar) {
           minutesBefore,
           link,
           eventType,
-        };
+        });
         chrome.alarms.create(alarmName, { when: alarmTime });
       });
     }
   }
 
-  await chrome.storage.local.set({ gcalEventMap: map });
+  const compactMap = pruneGcalEventMap(map);
+  await setLocalWithQuotaGuard(
+    { gcalEventMap: compactMap },
+    {
+      retryPayload: () => ({
+        gcalEventMap: pruneGcalEventMap(compactMap, { aggressive: true }),
+      }),
+    }
+  );
 }
 
 async function loadEventsRange(timeMin, timeMax, calendarIds, interactive) {
@@ -1820,8 +1928,16 @@ async function loadEventsRange(timeMin, timeMax, calendarIds, interactive) {
     }
 
     const sorted = flat.sort((a, b) => new Date(a.start) - new Date(b.start));
-    cache[cacheKey] = { fetchedAt: Date.now(), events: sorted };
-    await chrome.storage.local.set({ [GCAL_CACHE_KEY]: cache });
+    cache[cacheKey] = compactGcalEventCacheEntry({ fetchedAt: Date.now(), events: sorted });
+    const compactCache = pruneGcalEventCache(cache);
+    await setLocalWithQuotaGuard(
+      { [GCAL_CACHE_KEY]: compactCache },
+      {
+        retryPayload: () => ({
+          [GCAL_CACHE_KEY]: pruneGcalEventCache(compactCache, { aggressive: true }),
+        }),
+      }
+    );
     await recordDiagnosticSync(syncName, "ok", {
       cached: false,
       calendars: activeCalendars.length,
@@ -1870,14 +1986,17 @@ async function scheduleDeadlineAlerts(rows, map) {
       if (when <= now) return;
       const alarmName = buildDeadlineAlarmName(key, hours);
       chrome.alarms.create(alarmName, { when });
-      chrome.storage.local.set({
-        [alarmName]: {
-          summary,
-          url,
-          date,
-          hours,
-        },
-      });
+      void setLocalWithQuotaGuard({
+        [alarmName]: buildStoredNotificationPayload(
+          {
+            summary,
+            url,
+            date,
+            hours,
+          },
+          "deadline"
+        ),
+      }).catch(() => {});
     });
   }
 }
@@ -2068,7 +2187,7 @@ function normalizeQueuedNotionItem(rawItem) {
     : 0;
   return {
     id: rawItem.id || createNotionQueueId(),
-    payload,
+    payload: compactQueuedNotionPayload(payload),
     createdAt: Number.isFinite(rawItem.createdAt) ? rawItem.createdAt : Date.now(),
     attempts,
     nextAttemptAt,
@@ -2082,7 +2201,7 @@ async function enqueueNotionUpsert(payload) {
   const { [OFFLINE_QUEUE_KEY]: queue } = await chrome.storage.local.get([OFFLINE_QUEUE_KEY]);
   const next = Array.isArray(queue) ? queue.slice() : [];
   next.push(normalized);
-  await chrome.storage.local.set({ [OFFLINE_QUEUE_KEY]: next });
+  await setLocalWithQuotaGuard({ [OFFLINE_QUEUE_KEY]: next });
   return next.length;
 }
 
@@ -2101,18 +2220,20 @@ async function enqueueRejectedStage(payload) {
     REJECTED_STAGE_QUEUE_KEY,
   ]);
   const next = Array.isArray(queue) ? queue.slice() : [];
-  next.push({
-    id: createNotionQueueId(),
-    stageId,
-    company,
-    title,
-    status,
-    url,
-    source,
-    label,
-    queuedAt: Date.now(),
-  });
-  await chrome.storage.local.set({ [REJECTED_STAGE_QUEUE_KEY]: next });
+  next.push(
+    compactRejectedStageQueueItem({
+      id: createNotionQueueId(),
+      stageId,
+      company,
+      title,
+      status,
+      url,
+      source,
+      label,
+      queuedAt: Date.now(),
+    })
+  );
+  await setLocalWithQuotaGuard({ [REJECTED_STAGE_QUEUE_KEY]: next });
 
   notifyUser("Stage refuse", `${label} ajoute a la queue.`, "stage-refuse");
   return { ok: true, count: next.length, label };
@@ -2129,7 +2250,7 @@ async function updateNotionQueueHead(mode, replacement) {
   } else if (mode === "replace") {
     next[0] = replacement;
   }
-  await chrome.storage.local.set({ [OFFLINE_QUEUE_KEY]: next });
+  await setLocalWithQuotaGuard({ [OFFLINE_QUEUE_KEY]: next });
   return next.length;
 }
 
@@ -3121,9 +3242,13 @@ async function getStageStatusStats() {
     otherBreakdown,
     capped: false,
   };
-  await chrome.storage.local.set({
-    [STAGE_STATS_CACHE_KEY]: { at: Date.now(), data: result },
-  });
+  try {
+    await setLocalWithQuotaGuard({
+      [STAGE_STATS_CACHE_KEY]: { at: Date.now(), data: result },
+    });
+  } catch (_) {
+    // Skip cache write if storage is under pressure.
+  }
   return result;
 }
 
@@ -3284,13 +3409,17 @@ async function getStageSchemaCached(config, options = {}) {
     return { schema: entry.schema, cached: true };
   }
   const schema = await notionFetch(config.token, `databases/${config.dbId}`, "GET");
-  await chrome.storage.local.set({
-    [STAGE_SCHEMA_CACHE_KEY]: {
-      at: Date.now(),
-      dbId: config.dbId,
-      schema,
-    },
-  });
+  try {
+    await setLocalWithQuotaGuard({
+      [STAGE_SCHEMA_CACHE_KEY]: {
+        at: Date.now(),
+        dbId: config.dbId,
+        schema,
+      },
+    });
+  } catch (_) {
+    // Skip cache write if storage is under pressure.
+  }
   return { schema, cached: false };
 }
 
@@ -3330,6 +3459,544 @@ function mapStageRow(row, map) {
     createdTime: row?.created_time || "",
     lastEditedTime: row?.last_edited_time || row?.created_time || "",
   };
+}
+
+function trimStorageText(value, maxLength) {
+  const text = normalizeText(value || "");
+  if (!maxLength || text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function sameStorageValue(a, b) {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch (_) {
+    return false;
+  }
+}
+
+function parseStoredIsoDateMs(value) {
+  const iso = parseDateFromText(value || "");
+  if (!iso) return 0;
+  const ms = new Date(`${iso}T12:00:00`).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function buildNotionSyncWindowMs(options = {}) {
+  const lookbackDays = Number.isFinite(options.lookbackDays)
+    ? Math.max(0, Math.floor(options.lookbackDays))
+    : NOTION_SYNC_LOOKBACK_DAYS;
+  const lookaheadDays = Number.isFinite(options.lookaheadDays)
+    ? Math.max(0, Math.floor(options.lookaheadDays))
+    : NOTION_SYNC_LOOKAHEAD_DAYS;
+  const anchor = new Date();
+  anchor.setHours(12, 0, 0, 0);
+  const min = new Date(anchor);
+  min.setDate(min.getDate() - lookbackDays);
+  const max = new Date(anchor);
+  max.setDate(max.getDate() + lookaheadDays);
+  return { minMs: min.getTime(), maxMs: max.getTime() };
+}
+
+function isDateWithinNotionSyncWindow(value, windowMs = buildNotionSyncWindowMs()) {
+  const dateMs = parseStoredIsoDateMs(value);
+  if (!dateMs) return false;
+  return dateMs >= windowMs.minMs && dateMs <= windowMs.maxMs;
+}
+
+function notionSyncEntrySortValue(entry) {
+  const updatedAt = Number.isFinite(entry?.updatedAt) ? entry.updatedAt : 0;
+  const createdAt = Number.isFinite(entry?.createdAt) ? entry.createdAt : 0;
+  return Math.max(updatedAt, createdAt, parseStoredIsoDateMs(entry?.date || ""));
+}
+
+function compactNotionSyncMap(raw, options = {}) {
+  const aggressive = !!options.aggressive;
+  const maxEntries = aggressive
+    ? NOTION_SYNC_MAP_FALLBACK_ENTRIES
+    : NOTION_SYNC_MAP_MAX_ENTRIES;
+  const fallbackRetentionMs = (aggressive ? 7 : 30) * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const windowMs = buildNotionSyncWindowMs(options);
+
+  const pages = Object.entries(raw?.pages || {})
+    .map(([pageId, value]) => {
+      const normalizedPageId = trimStorageText(pageId, 96);
+      const eventId = trimStorageText(value?.eventId, 128);
+      if (!normalizedPageId || !eventId) return null;
+      const entry = {
+        eventId,
+        calendarId: trimStorageText(value?.calendarId, 128),
+        date: parseDateFromText(value?.date || "") || "",
+        createdAt: Number.isFinite(value?.createdAt) ? value.createdAt : 0,
+        updatedAt: Number.isFinite(value?.updatedAt) ? value.updatedAt : 0,
+      };
+      const dateMs = parseStoredIsoDateMs(entry.date);
+      const sortValue = notionSyncEntrySortValue(entry);
+      const keepByDate = dateMs && dateMs >= windowMs.minMs && dateMs <= windowMs.maxMs;
+      const keepByActivity = !dateMs && sortValue > now - fallbackRetentionMs;
+      if (!keepByDate && !keepByActivity) return null;
+      return [normalizedPageId, entry];
+    })
+    .filter(Boolean)
+    .sort((a, b) => notionSyncEntrySortValue(b[1]) - notionSyncEntrySortValue(a[1]))
+    .slice(0, maxEntries);
+
+  const compactPages = Object.fromEntries(pages);
+  const events = {};
+  pages.forEach(([pageId, entry]) => {
+    if (entry?.eventId) {
+      events[entry.eventId] = pageId;
+    }
+  });
+  return { pages: compactPages, events };
+}
+
+function normalizeSyncMap(raw) {
+  return compactNotionSyncMap(raw);
+}
+
+function compactQueuedNotionPayload(payload) {
+  return {
+    title: trimStorageText(payload?.title, 220),
+    company: trimStorageText(payload?.company, 160),
+    location: trimStorageText(payload?.location, 160),
+    url: trimStorageText(payload?.url, 1024),
+    applied: !!payload?.applied,
+    datePosted: trimStorageText(payload?.datePosted, 40),
+    startDate: trimStorageText(payload?.startDate, 40),
+    role: trimStorageText(payload?.role, 160),
+    type: trimStorageText(payload?.type, 120),
+    deadline: trimStorageText(payload?.deadline, 40),
+  };
+}
+
+function compactRejectedStageQueueItem(entry) {
+  return {
+    id: trimStorageText(entry?.id, 64) || createNotionQueueId(),
+    stageId: trimStorageText(entry?.stageId, 96),
+    company: trimStorageText(entry?.company, 160),
+    title: trimStorageText(entry?.title, 220),
+    status: trimStorageText(entry?.status, 120),
+    url: trimStorageText(entry?.url, 1024),
+    source: trimStorageText(entry?.source, 48),
+    label: trimStorageText(entry?.label, 260),
+    queuedAt: Number.isFinite(entry?.queuedAt) ? entry.queuedAt : Date.now(),
+  };
+}
+
+function compactYahooNewsPayload(raw, maxItems = YAHOO_NEWS_MAX_ITEMS) {
+  const limit = Number.isFinite(maxItems) ? Math.max(1, Math.floor(maxItems)) : YAHOO_NEWS_MAX_ITEMS;
+  const items = Array.isArray(raw?.items)
+    ? raw.items.slice(0, limit).map((item) => ({
+        title: trimStorageText(item?.title, 180),
+        link: trimStorageText(item?.link, 1024),
+        pubDate: trimStorageText(item?.pubDate, 96),
+        description: trimStorageText(item?.description, 320),
+      }))
+    : [];
+  return {
+    fetchedAt: Number.isFinite(raw?.fetchedAt) ? raw.fetchedAt : Date.now(),
+    items,
+  };
+}
+
+function compactYahooQuotesPayload(raw, maxSymbols = YAHOO_QUOTES_MAX_SYMBOLS) {
+  const limit =
+    Number.isFinite(maxSymbols) ? Math.max(1, Math.floor(maxSymbols)) : YAHOO_QUOTES_MAX_SYMBOLS;
+  const entries = Object.entries(raw?.bySymbol || {})
+    .sort(
+      (a, b) =>
+        (Number.isFinite(b?.[1]?.updatedAt) ? b[1].updatedAt : 0) -
+        (Number.isFinite(a?.[1]?.updatedAt) ? a[1].updatedAt : 0)
+    )
+    .slice(0, limit)
+    .map(([symbol, value]) => [
+      trimStorageText(symbol, 32),
+      {
+        symbol: trimStorageText(value?.symbol || symbol, 32),
+        price: Number.isFinite(value?.price) ? value.price : null,
+        changePercent: Number.isFinite(value?.changePercent) ? value.changePercent : null,
+        currency: trimStorageText(value?.currency, 24),
+        updatedAt: Number.isFinite(value?.updatedAt) ? value.updatedAt : Date.now(),
+      },
+    ]);
+  return {
+    fetchedAt: Number.isFinite(raw?.fetchedAt) ? raw.fetchedAt : Date.now(),
+    bySymbol: Object.fromEntries(entries),
+  };
+}
+
+function compactGcalEventForStorage(item) {
+  return {
+    id: trimStorageText(item?.id, 128),
+    summary: trimStorageText(item?.summary, 180),
+    location: trimStorageText(item?.location, 180),
+    start: trimStorageText(item?.start, 64),
+    end: trimStorageText(item?.end, 64),
+    calendarId: trimStorageText(item?.calendarId, 128),
+    calendarSummary: trimStorageText(item?.calendarSummary, 120),
+    htmlLink: trimStorageText(item?.htmlLink, 768),
+    sourceUrl: trimStorageText(item?.sourceUrl, 768),
+    description: trimStorageText(item?.description, 320),
+    attendees: Array.isArray(item?.attendees)
+      ? item.attendees.map((entry) => trimStorageText(entry, 120)).filter(Boolean).slice(0, 5)
+      : [],
+    meetingLink: trimStorageText(item?.meetingLink, 768),
+    sourceType: trimStorageText(item?.sourceType, 24),
+    eventType: trimStorageText(item?.eventType, 32),
+    tags: Array.isArray(item?.tags)
+      ? item.tags.map((entry) => trimStorageText(entry, 48)).filter(Boolean).slice(0, 4)
+      : [],
+  };
+}
+
+function compactGcalEventCacheEntry(entry, maxEvents = GCAL_CACHE_MAX_EVENTS_PER_BUCKET) {
+  const limit =
+    Number.isFinite(maxEvents)
+      ? Math.max(1, Math.floor(maxEvents))
+      : GCAL_CACHE_MAX_EVENTS_PER_BUCKET;
+  const events = Array.isArray(entry?.events) ? entry.events : [];
+  return {
+    fetchedAt: Number.isFinite(entry?.fetchedAt) ? entry.fetchedAt : Date.now(),
+    events: events.slice(0, limit).map(compactGcalEventForStorage),
+  };
+}
+
+function pruneGcalEventCache(cache, options = {}) {
+  const aggressive = !!options.aggressive;
+  const maxBuckets = aggressive ? GCAL_CACHE_FALLBACK_BUCKETS : GCAL_CACHE_MAX_BUCKETS;
+  const maxEvents = aggressive
+    ? GCAL_CACHE_FALLBACK_EVENTS_PER_BUCKET
+    : GCAL_CACHE_MAX_EVENTS_PER_BUCKET;
+  const now = Date.now();
+  const entries = Object.entries(cache && typeof cache === "object" ? cache : {})
+    .map(([key, value]) => [key, compactGcalEventCacheEntry(value, maxEvents)])
+    .filter(([, value]) => {
+      if (!Array.isArray(value?.events) || value.events.length === 0) return false;
+      const fetchedAt = Number.isFinite(value?.fetchedAt) ? value.fetchedAt : 0;
+      return fetchedAt > 0 && now - fetchedAt < GCAL_CACHE_TTL_MS;
+    })
+    .sort((a, b) => b[1].fetchedAt - a[1].fetchedAt)
+    .slice(0, maxBuckets);
+  return Object.fromEntries(entries);
+}
+
+function compactGcalAlarmEntry(entry) {
+  return {
+    calendarId: trimStorageText(entry?.calendarId, 128),
+    calendarSummary: trimStorageText(entry?.calendarSummary, 120),
+    eventId: trimStorageText(entry?.eventId, 128),
+    summary: trimStorageText(entry?.summary, 180),
+    start: trimStorageText(entry?.start, 64),
+    minutesBefore: Number.isFinite(entry?.minutesBefore) ? entry.minutesBefore : 0,
+    link: trimStorageText(entry?.link, 768),
+    eventType: trimStorageText(entry?.eventType, 32),
+    snoozeMinutes: Number.isFinite(entry?.snoozeMinutes) ? entry.snoozeMinutes : undefined,
+    sourceNotificationId: trimStorageText(entry?.sourceNotificationId, 160),
+  };
+}
+
+function gcalAlarmEntrySortValue(entry) {
+  const startMs = new Date(entry?.start || 0).getTime();
+  if (Number.isFinite(startMs) && startMs > 0) return startMs;
+  return Date.now();
+}
+
+function pruneGcalEventMap(map, options = {}) {
+  const aggressive = !!options.aggressive;
+  const activeAlarmNames = options.activeAlarmNames instanceof Set ? options.activeAlarmNames : null;
+  const maxEntries = aggressive ? GCAL_EVENT_MAP_FALLBACK_ENTRIES : GCAL_EVENT_MAP_MAX_ENTRIES;
+  const now = Date.now();
+  const entries = Object.entries(map && typeof map === "object" ? map : {})
+    .map(([key, value]) => [key, compactGcalAlarmEntry(value)])
+    .filter(([key, value]) => {
+      if (!key) return false;
+      if (activeAlarmNames && !activeAlarmNames.has(key)) return false;
+      const startMs = new Date(value?.start || 0).getTime();
+      if (!Number.isFinite(startMs) || startMs <= 0) return true;
+      return startMs >= now - GCAL_NOTIFY_WINDOW_MIN * 60 * 1000;
+    })
+    .sort((a, b) => gcalAlarmEntrySortValue(a[1]) - gcalAlarmEntrySortValue(b[1]))
+    .slice(0, maxEntries);
+  return Object.fromEntries(entries);
+}
+
+function pruneGcalNotifiedState(notified, options = {}) {
+  const aggressive = !!options.aggressive;
+  const activeAlarmNames = options.activeAlarmNames instanceof Set ? options.activeAlarmNames : null;
+  const retentionMs = aggressive ? 60 * 60 * 1000 : GCAL_NOTIFIED_RETENTION_MS;
+  const now = Date.now();
+  const entries = Object.entries(notified && typeof notified === "object" ? notified : {})
+    .filter(([key, value]) => {
+      const ts = Number.isFinite(value) ? value : Number.parseInt(value, 10);
+      if (activeAlarmNames && activeAlarmNames.has(key)) return true;
+      return Number.isFinite(ts) && now - ts < retentionMs;
+    })
+    .sort((a, b) => {
+      const bTs = Number.isFinite(b?.[1]) ? b[1] : Number.parseInt(b?.[1], 10) || 0;
+      const aTs = Number.isFinite(a?.[1]) ? a[1] : Number.parseInt(a?.[1], 10) || 0;
+      return bTs - aTs;
+    })
+    .slice(0, GCAL_NOTIFIED_MAX_ENTRIES);
+  return Object.fromEntries(entries);
+}
+
+function buildStoredNotificationPayload(payload, kind = "default") {
+  return {
+    ...compactGcalAlarmEntry(payload),
+    title: trimStorageText(payload?.title, 180),
+    url: trimStorageText(payload?.url, 768),
+    date: trimStorageText(payload?.date, 64),
+    when: trimStorageText(payload?.when, 64),
+    hours: Number.isFinite(payload?.hours) ? payload.hours : undefined,
+    notifiedAt: Number.isFinite(payload?.notifiedAt) ? payload.notifiedAt : undefined,
+    storedAt: Date.now(),
+    notificationKind: trimStorageText(kind, 24),
+  };
+}
+
+function isAlarmBackedStorageKey(key) {
+  return (
+    key.startsWith(GCAL_ALARM_PREFIX) ||
+    key.startsWith(GCAL_SNOOZE_ALARM_PREFIX) ||
+    key.startsWith(DEADLINE_ALARM_PREFIX) ||
+    key.startsWith(INTERVIEW_ALARM_PREFIX)
+  );
+}
+
+function getAlarmBackedStorageTime(key, value) {
+  if (!value || typeof value !== "object") return 0;
+  const candidates = [value.notifiedAt, value.storedAt, value.start, value.when, value.date];
+  for (const candidate of candidates) {
+    const direct = Number(candidate);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const parsed = new Date(candidate || 0).getTime();
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  if (key.startsWith(DEADLINE_ALARM_PREFIX)) {
+    const parsed = parseDateFromText(value?.date || "");
+    if (parsed) {
+      const asDate = new Date(`${parsed}T00:00:00`).getTime();
+      if (Number.isFinite(asDate) && asDate > 0) return asDate;
+    }
+  }
+  return 0;
+}
+
+async function runStorageMaintenance(options = {}) {
+  const aggressive = !!options.aggressive;
+  const [localData, alarms] = await Promise.all([
+    chrome.storage.local.get(null),
+    chrome.alarms.getAll(),
+  ]);
+  const activeAlarmNames = new Set(
+    (Array.isArray(alarms) ? alarms : []).map((alarm) => alarm?.name).filter(Boolean)
+  );
+  const toSet = {};
+  const toRemove = [];
+
+  const planObjectUpdate = (key, nextValue) => {
+    if (!Object.prototype.hasOwnProperty.call(localData, key)) return;
+    const currentValue = localData[key];
+    if (
+      nextValue &&
+      typeof nextValue === "object" &&
+      !Array.isArray(nextValue) &&
+      Object.keys(nextValue).length === 0
+    ) {
+      toRemove.push(key);
+      return;
+    }
+    if (!sameStorageValue(currentValue, nextValue)) {
+      toSet[key] = nextValue;
+    }
+  };
+
+  planObjectUpdate(GCAL_CACHE_KEY, pruneGcalEventCache(localData[GCAL_CACHE_KEY], { aggressive }));
+  planObjectUpdate(
+    "gcalEventMap",
+    pruneGcalEventMap(localData.gcalEventMap, { aggressive, activeAlarmNames })
+  );
+  planObjectUpdate(
+    GCAL_NOTIFIED_KEY,
+    pruneGcalNotifiedState(localData[GCAL_NOTIFIED_KEY], { aggressive, activeAlarmNames })
+  );
+
+  if (Object.prototype.hasOwnProperty.call(localData, "yahooNews")) {
+    const nextNews = compactYahooNewsPayload(
+      localData.yahooNews,
+      aggressive ? Math.min(10, YAHOO_NEWS_MAX_ITEMS) : YAHOO_NEWS_MAX_ITEMS
+    );
+    if (!nextNews.items.length) {
+      toRemove.push("yahooNews");
+    } else if (!sameStorageValue(localData.yahooNews, nextNews)) {
+      toSet.yahooNews = nextNews;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(localData, "yahooQuotes")) {
+    const nextQuotes = compactYahooQuotesPayload(
+      localData.yahooQuotes,
+      aggressive ? Math.min(8, YAHOO_QUOTES_MAX_SYMBOLS) : YAHOO_QUOTES_MAX_SYMBOLS
+    );
+    if (!Object.keys(nextQuotes.bySymbol || {}).length) {
+      toRemove.push("yahooQuotes");
+    } else if (!sameStorageValue(localData.yahooQuotes, nextQuotes)) {
+      toSet.yahooQuotes = nextQuotes;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(localData, NOTION_SYNC_MAP)) {
+    const nextSyncMap = compactNotionSyncMap(localData[NOTION_SYNC_MAP], { aggressive });
+    if (!Object.keys(nextSyncMap.pages || {}).length) {
+      toRemove.push(NOTION_SYNC_MAP);
+    } else if (!sameStorageValue(localData[NOTION_SYNC_MAP], nextSyncMap)) {
+      toSet[NOTION_SYNC_MAP] = nextSyncMap;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(localData, OFFLINE_QUEUE_KEY)) {
+    const nextQueue = (Array.isArray(localData[OFFLINE_QUEUE_KEY]) ? localData[OFFLINE_QUEUE_KEY] : [])
+      .map((entry) => normalizeQueuedNotionItem(entry))
+      .filter(Boolean);
+    if (!nextQueue.length) {
+      toRemove.push(OFFLINE_QUEUE_KEY);
+    } else if (!sameStorageValue(localData[OFFLINE_QUEUE_KEY], nextQueue)) {
+      toSet[OFFLINE_QUEUE_KEY] = nextQueue;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(localData, REJECTED_STAGE_QUEUE_KEY)) {
+    const nextRejected = (
+      Array.isArray(localData[REJECTED_STAGE_QUEUE_KEY]) ? localData[REJECTED_STAGE_QUEUE_KEY] : []
+    )
+      .map((entry) => compactRejectedStageQueueItem(entry))
+      .filter((entry) => entry.stageId);
+    if (!nextRejected.length) {
+      toRemove.push(REJECTED_STAGE_QUEUE_KEY);
+    } else if (!sameStorageValue(localData[REJECTED_STAGE_QUEUE_KEY], nextRejected)) {
+      toSet[REJECTED_STAGE_QUEUE_KEY] = nextRejected;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(localData, STAGE_DASHBOARD_SNAPSHOT_KEY)) {
+    const snapshot = localData[STAGE_DASHBOARD_SNAPSHOT_KEY];
+    if (snapshot && typeof snapshot === "object") {
+      const nextSnapshot = buildStageSnapshotStoragePayload(snapshot, {
+        maxItems: aggressive ? STAGE_SNAPSHOT_FALLBACK_ROWS : STAGE_SNAPSHOT_MAX_CACHED_ROWS,
+        capped: aggressive ? true : !!snapshot?.capped,
+      });
+      if (!Array.isArray(nextSnapshot?.allStages) || !nextSnapshot.allStages.length) {
+        toRemove.push(STAGE_DASHBOARD_SNAPSHOT_KEY);
+      } else if (!sameStorageValue(snapshot, nextSnapshot)) {
+        toSet[STAGE_DASHBOARD_SNAPSHOT_KEY] = nextSnapshot;
+      }
+    } else {
+      toRemove.push(STAGE_DASHBOARD_SNAPSHOT_KEY);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(localData, STAGE_SCHEMA_CACHE_KEY)) {
+    const entry = localData[STAGE_SCHEMA_CACHE_KEY];
+    const stale = !entry?.at || Date.now() - entry.at > STAGE_SCHEMA_TTL_MS;
+    if (stale) {
+      toRemove.push(STAGE_SCHEMA_CACHE_KEY);
+    }
+  }
+
+  const now = Date.now();
+  const retentionMs = aggressive ? 60 * 60 * 1000 : ALARM_STORAGE_RETENTION_MS;
+  Object.entries(localData).forEach(([key, value]) => {
+    if (!isAlarmBackedStorageKey(key)) return;
+    if (activeAlarmNames.has(key)) return;
+    const timeRef = getAlarmBackedStorageTime(key, value);
+    if (!timeRef || timeRef < now - retentionMs) {
+      toRemove.push(key);
+    }
+  });
+
+  const uniqueToRemove = Array.from(new Set(toRemove));
+  if (uniqueToRemove.length) {
+    await chrome.storage.local.remove(uniqueToRemove);
+  }
+  if (Object.keys(toSet).length) {
+    await chrome.storage.local.set(toSet);
+  }
+  return { removedKeys: uniqueToRemove.length, updatedKeys: Object.keys(toSet).length };
+}
+
+async function setLocalWithQuotaGuard(payload, options = {}) {
+  try {
+    await chrome.storage.local.set(payload);
+    return { recovered: false };
+  } catch (err) {
+    if (!isStorageQuotaError(err)) throw err;
+  }
+
+  await runStorageMaintenance({ aggressive: true });
+  const retryPayload =
+    typeof options.retryPayload === "function" ? await options.retryPayload() : payload;
+  await chrome.storage.local.set(retryPayload);
+  return { recovered: true };
+}
+
+async function removeNotificationStorage(notificationId) {
+  if (!notificationId) return;
+  const removeKeys = [notificationId];
+  const data = await chrome.storage.local.get(["gcalEventMap", GCAL_NOTIFIED_KEY]);
+  const nextMap = { ...(data?.gcalEventMap || {}) };
+  const nextNotified = { ...(data?.[GCAL_NOTIFIED_KEY] || {}) };
+  let shouldWrite = false;
+
+  if (Object.prototype.hasOwnProperty.call(nextMap, notificationId)) {
+    delete nextMap[notificationId];
+    shouldWrite = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(nextNotified, notificationId)) {
+    delete nextNotified[notificationId];
+    shouldWrite = true;
+  }
+
+  await chrome.storage.local.remove(removeKeys);
+  if (shouldWrite) {
+    await chrome.storage.local.set({
+      gcalEventMap: pruneGcalEventMap(nextMap, { aggressive: true }),
+      [GCAL_NOTIFIED_KEY]: pruneGcalNotifiedState(nextNotified, { aggressive: true }),
+    });
+  }
+}
+
+function compactStageItemForStorage(item) {
+  return {
+    id: trimStorageText(item?.id, 96),
+    title: trimStorageText(item?.title, 180),
+    company: trimStorageText(item?.company, 160),
+    location: trimStorageText(item?.location, 160),
+    url: trimStorageText(item?.url, 1024),
+    status: trimStorageText(item?.status, 120),
+    role: trimStorageText(item?.role, 160),
+    type: trimStorageText(item?.type, 120),
+    applicationDate: trimStorageText(item?.applicationDate, 40),
+    startMonth: trimStorageText(item?.startMonth, 40),
+    openDate: trimStorageText(item?.openDate, 40),
+    closeDate: trimStorageText(item?.closeDate, 40),
+    createdTime: trimStorageText(item?.createdTime, 40),
+    lastEditedTime: trimStorageText(item?.lastEditedTime, 40),
+  };
+}
+
+function stageStorageSortValue(item) {
+  return new Date(item?.lastEditedTime || item?.createdTime || 0).getTime() || 0;
+}
+
+function compactStageItemsForStorage(items, maxItems = STAGE_SNAPSHOT_MAX_CACHED_ROWS) {
+  const list = Array.isArray(items) ? items.map(compactStageItemForStorage) : [];
+  if (list.length <= maxItems) return list;
+  return list
+    .slice()
+    .sort((a, b) => stageStorageSortValue(b) - stageStorageSortValue(a))
+    .slice(0, maxItems);
 }
 
 function buildStageStatsFromItems(items) {
@@ -3550,6 +4217,38 @@ function normalizeStageSnapshot(raw, overrides = {}) {
   return { ...normalized, ...overrides };
 }
 
+function buildStageSnapshotStoragePayload(snapshot, options = {}) {
+  const normalized = normalizeStageSnapshot(snapshot, { source: "network", stale: false });
+  const maxItems = Number.isFinite(options.maxItems)
+    ? Math.max(25, Math.floor(options.maxItems))
+    : STAGE_SNAPSHOT_MAX_CACHED_ROWS;
+  const compactAllStages = compactStageItemsForStorage(normalized.allStages, maxItems);
+  const capped =
+    !!options.capped || !!normalized.capped || compactAllStages.length < normalized.allStages.length;
+
+  return {
+    version: normalized.version,
+    generatedAt: normalized.generatedAt,
+    source: normalized.source,
+    stale: normalized.stale,
+    total: normalized.total,
+    allStages: compactAllStages,
+    stats: normalized.stats,
+    weeklyKpis: normalized.weeklyKpis,
+    instrumentation: {
+      ...(normalized.instrumentation || {}),
+      cachedRows: compactAllStages.length,
+      capped,
+    },
+    capped,
+  };
+}
+
+function isStorageQuotaError(err) {
+  const message = String(err?.message || err || "");
+  return /resource::kquotabytes|quota[_ ]?bytes|quota exceeded/i.test(message);
+}
+
 function buildStageDashboardSnapshot(rows, map, meta = {}) {
   const allStages = rows.map((row) => mapStageRow(row, map));
   const openStages = allStages.filter((item) => isStrictOpenStageStatus(item.status));
@@ -3594,12 +4293,36 @@ async function readStageSnapshot() {
 }
 
 async function writeStageSnapshot(snapshot) {
-  const normalized = normalizeStageSnapshot(snapshot, { source: "network", stale: false });
-  await chrome.storage.local.set({
-    [STAGE_DASHBOARD_SNAPSHOT_KEY]: normalized,
-    [STAGE_STATS_CACHE_KEY]: { at: normalized.generatedAt, data: normalized.stats },
+  const primary = buildStageSnapshotStoragePayload(snapshot);
+  const fallback = buildStageSnapshotStoragePayload(snapshot, {
+    maxItems: STAGE_SNAPSHOT_FALLBACK_ROWS,
+    capped: true,
   });
-  return normalized;
+
+  const writePayload = (payload) => ({
+    [STAGE_DASHBOARD_SNAPSHOT_KEY]: payload,
+    [STAGE_STATS_CACHE_KEY]: { at: payload.generatedAt, data: payload.stats, capped: !!payload.capped },
+  });
+
+  try {
+    await setLocalWithQuotaGuard(writePayload(primary));
+    return primary;
+  } catch (err) {
+    if (!isStorageQuotaError(err)) throw err;
+  }
+
+  try {
+    await setLocalWithQuotaGuard(writePayload(fallback));
+    return fallback;
+  } catch (err) {
+    if (!isStorageQuotaError(err)) throw err;
+  }
+
+  await chrome.storage.local.remove([STAGE_DASHBOARD_SNAPSHOT_KEY]);
+  await setLocalWithQuotaGuard({
+    [STAGE_STATS_CACHE_KEY]: { at: fallback.generatedAt, data: fallback.stats, capped: true },
+  });
+  return fallback;
 }
 
 function isStageSnapshotFresh(snapshot) {
@@ -4874,42 +5597,66 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "SCHEDULE_INTERVIEW_REMINDER") {
-    const { id, when, title, link } = msg?.payload || {};
-    if (!id || !when) {
-      sendResponse({ ok: false, error: "Parametres manquants." });
-      return true;
-    }
-    const whenMs = new Date(when).getTime();
-    if (!Number.isFinite(whenMs)) {
-      sendResponse({ ok: false, error: "Date invalide." });
-      return true;
-    }
-    const alarmName = `${INTERVIEW_ALARM_PREFIX}${id}`;
-    chrome.alarms.create(alarmName, { when: whenMs });
-    chrome.storage.local.set({
-      [alarmName]: {
-        title: title || "Entretien",
-        link: link || "",
-        when,
-      },
-    });
-    sendResponse({ ok: true });
-    return true;
+    return respondWith(
+      (async () => {
+        const { id, when, title, link } = msg?.payload || {};
+        if (!id || !when) {
+          throw new Error("Parametres manquants.");
+        }
+        const whenMs = new Date(when).getTime();
+        if (!Number.isFinite(whenMs)) {
+          throw new Error("Date invalide.");
+        }
+        const alarmName = `${INTERVIEW_ALARM_PREFIX}${id}`;
+        chrome.alarms.create(alarmName, { when: whenMs });
+        await setLocalWithQuotaGuard({
+          [alarmName]: buildStoredNotificationPayload(
+            {
+              summary: title || "Entretien",
+              title: title || "Entretien",
+              link: link || "",
+              when,
+            },
+            "interview"
+          ),
+        });
+        return { ok: true };
+      })(),
+      sendResponse,
+      "Rappel entretien - planification",
+      { meta: { id: msg?.payload?.id || null } }
+    );
   }
 
   if (msg?.type === "CLEAR_INTERVIEW_REMINDER") {
-    const { id } = msg?.payload || {};
-    if (!id) {
-      sendResponse({ ok: false, error: "Parametres manquants." });
-      return true;
-    }
-    const alarmName = `${INTERVIEW_ALARM_PREFIX}${id}`;
-    chrome.alarms.clear(alarmName, () => {
-      chrome.storage.local.remove([alarmName], () => {
-        sendResponse({ ok: true });
-      });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const { id } = msg?.payload || {};
+        if (!id) {
+          throw new Error("Parametres manquants.");
+        }
+        const alarmName = `${INTERVIEW_ALARM_PREFIX}${id}`;
+        await new Promise((resolve, reject) => {
+          try {
+            chrome.alarms.clear(alarmName, () => {
+              const err = chrome.runtime?.lastError;
+              if (err) {
+                reject(new Error(err.message || "Impossible de supprimer l'alarme."));
+                return;
+              }
+              resolve();
+            });
+          } catch (err) {
+            reject(err);
+          }
+        });
+        await chrome.storage.local.remove([alarmName]);
+        return { ok: true };
+      })(),
+      sendResponse,
+      "Rappel entretien - suppression",
+      { meta: { id: msg?.payload?.id || null } }
+    );
   }
 
   if (msg?.type === "GET_TODO_STAGES") {
@@ -5096,65 +5843,70 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "GCAL_AUTH_STATUS") {
-    getAuthToken(false)
-      .then(() => sendResponse({ ok: true, connected: true }))
-      .catch(() => sendResponse({ ok: true, connected: false }));
-    return true;
+    return respondWith(
+      (async () => {
+        try {
+          await getAuthToken(false);
+          return { ok: true, connected: true };
+        } catch (_) {
+          return { ok: true, connected: false };
+        }
+      })(),
+      sendResponse,
+      "Google Calendar - statut connexion"
+    );
   }
 
   if (msg?.type === "GCAL_LOGOUT") {
-  (async () => {
-    try {
-      // Try to revoke the current token so Google stops issuing it silently.
-      let tokenToRevoke = null;
-      try {
-        tokenToRevoke = await getAuthToken(false);
-      } catch (_) {
-        tokenToRevoke = null;
-      }
-
-      if (tokenToRevoke) {
+    return respondWith(
+      (async () => {
+        // Try to revoke the current token so Google stops issuing it silently.
+        let tokenToRevoke = null;
         try {
-          const revokeUrl = `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(
-            tokenToRevoke
-          )}`;
-          await fetch(revokeUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          });
+          tokenToRevoke = await getAuthToken(false);
         } catch (_) {
-          // Even if revoke fails, we still clear the cached tokens.
+          tokenToRevoke = null;
         }
-      }
 
-      if (typeof chrome.identity.clearAllCachedAuthTokens === "function") {
-        await new Promise((resolve) => chrome.identity.clearAllCachedAuthTokens(resolve));
-      } else if (tokenToRevoke) {
-        await new Promise((resolve) =>
-          chrome.identity.removeCachedAuthToken({ token: tokenToRevoke }, resolve)
-        );
-      }
+        if (tokenToRevoke) {
+          try {
+            const revokeUrl = `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(
+              tokenToRevoke
+            )}`;
+            await fetch(revokeUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            });
+          } catch (_) {
+            // Even if revoke fails, we still clear the cached tokens.
+          }
+        }
 
-      // Clear local Calendar-related state so the UI reflects the logout immediately.
-      await chrome.storage.local.remove([
-        "gcalEventCache",
-        "gcalEventMap",
-        "gcalNotified",
-        "gcalSelectedCalendars",
-        "gcalNotifyCalendars",
-      ]);
+        if (typeof chrome.identity.clearAllCachedAuthTokens === "function") {
+          await new Promise((resolve) => chrome.identity.clearAllCachedAuthTokens(resolve));
+        } else if (tokenToRevoke) {
+          await new Promise((resolve) =>
+            chrome.identity.removeCachedAuthToken({ token: tokenToRevoke }, resolve)
+          );
+        }
 
-      await recordDiagnosticSync("googleAuth", "ok", { connected: false, loggedOut: true });
-      sendResponse({ ok: true });
-    } catch (err) {
-      const entry = await handleError(err, "Google Calendar - d?connexion", null, {
-        syncName: "googleAuth",
-      });
-      sendResponse({ ok: false, error: entry.message, code: entry.code });
-    }
-  })();
-  return true;
-}
+        // Clear local Calendar-related state so the UI reflects the logout immediately.
+        await chrome.storage.local.remove([
+          "gcalEventCache",
+          "gcalEventMap",
+          "gcalNotified",
+          "gcalSelectedCalendars",
+          "gcalNotifyCalendars",
+        ]);
+
+        await recordDiagnosticSync("googleAuth", "ok", { connected: false, loggedOut: true });
+        return { ok: true };
+      })(),
+      sendResponse,
+      "Google Calendar - deconnexion",
+      { syncName: "googleAuth" }
+    );
+  }
 
   if (msg?.type === "GCAL_CREATE_EVENT") {
     const { calendarId, event } = msg.payload || {};
@@ -5262,116 +6014,156 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "NOTION_SYNC_STATUS") {
-    chrome.storage.local.get([NOTION_SYNC_KEY], (data) => {
-      sendResponse({ ok: true, enabled: !!data[NOTION_SYNC_KEY] });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const data = await chrome.storage.local.get([NOTION_SYNC_KEY]);
+        return { ok: true, enabled: !!data[NOTION_SYNC_KEY] };
+      })(),
+      sendResponse,
+      "Sync Notion - statut"
+    );
   }
 
   if (msg?.type === "NOTION_SYNC_SET") {
-    const enabled = !!msg.payload?.enabled;
-    chrome.storage.local.set({ [NOTION_SYNC_KEY]: enabled }, () => {
-      sendResponse({ ok: true });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const enabled = !!msg.payload?.enabled;
+        await chrome.storage.local.set({ [NOTION_SYNC_KEY]: enabled });
+        return { ok: true };
+      })(),
+      sendResponse,
+      "Sync Notion - mise a jour"
+    );
   }
 
   if (msg?.type === "DEADLINE_GET_PREFS") {
-    chrome.storage.local.get([DEADLINE_PREFS_KEY], (data) => {
-      sendResponse({ ok: true, prefs: data[DEADLINE_PREFS_KEY] });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const data = await chrome.storage.local.get([DEADLINE_PREFS_KEY]);
+        return { ok: true, prefs: data[DEADLINE_PREFS_KEY] };
+      })(),
+      sendResponse,
+      "Deadlines - preferences"
+    );
   }
 
   if (msg?.type === "DEADLINE_SET_PREFS") {
-    const prefs = msg.payload || {};
-    chrome.storage.local.set({ [DEADLINE_PREFS_KEY]: prefs }, () => {
-      sendResponse({ ok: true });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const prefs = msg.payload || {};
+        await chrome.storage.local.set({ [DEADLINE_PREFS_KEY]: prefs });
+        return { ok: true };
+      })(),
+      sendResponse,
+      "Deadlines - sauvegarde preferences"
+    );
   }
 
   if (msg?.type === "OFFLINE_QUEUE_STATUS") {
-    chrome.storage.local.get([OFFLINE_QUEUE_KEY], (data) => {
-      const items = Array.isArray(data[OFFLINE_QUEUE_KEY]) ? data[OFFLINE_QUEUE_KEY] : [];
-      sendResponse({ ok: true, count: items.length });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const data = await chrome.storage.local.get([OFFLINE_QUEUE_KEY]);
+        const items = Array.isArray(data[OFFLINE_QUEUE_KEY]) ? data[OFFLINE_QUEUE_KEY] : [];
+        return { ok: true, count: items.length };
+      })(),
+      sendResponse,
+      "Queue hors ligne - statut"
+    );
   }
 
   if (msg?.type === "OFFLINE_QUEUE_DETAILS") {
-    chrome.storage.local.get([OFFLINE_QUEUE_KEY], (data) => {
-      const now = Date.now();
-      const rawItems = Array.isArray(data[OFFLINE_QUEUE_KEY]) ? data[OFFLINE_QUEUE_KEY] : [];
-      const items = rawItems
-        .map((entry) => normalizeQueuedNotionItem(entry))
-        .filter(Boolean)
-        .map((entry, index) => {
-          const payload = entry.payload || {};
-          const company = normalizeText(payload.company || "");
-          const title = normalizeText(payload.title || "");
-          const fallback = normalizeText(payload.url || "");
-          const label = [company, title].filter(Boolean).join(" - ") || fallback || "Stage";
-          const waitMs = entry.nextAttemptAt ? Math.max(0, entry.nextAttemptAt - now) : 0;
-          const state =
-            waitMs > 0
-              ? "retry_wait"
-              : index === 0 && !!notionQueueWorkerInFlight
-                ? "uploading"
-                : "queued";
+    return respondWith(
+      (async () => {
+        const data = await chrome.storage.local.get([OFFLINE_QUEUE_KEY]);
+        const now = Date.now();
+        const rawItems = Array.isArray(data[OFFLINE_QUEUE_KEY]) ? data[OFFLINE_QUEUE_KEY] : [];
+        const items = rawItems
+          .map((entry) => normalizeQueuedNotionItem(entry))
+          .filter(Boolean)
+          .map((entry, index) => {
+            const payload = entry.payload || {};
+            const company = normalizeText(payload.company || "");
+            const title = normalizeText(payload.title || "");
+            const fallback = normalizeText(payload.url || "");
+            const label = [company, title].filter(Boolean).join(" - ") || fallback || "Stage";
+            const waitMs = entry.nextAttemptAt ? Math.max(0, entry.nextAttemptAt - now) : 0;
+            const state =
+              waitMs > 0
+                ? "retry_wait"
+                : index === 0 && !!notionQueueWorkerInFlight
+                  ? "uploading"
+                  : "queued";
 
-          return {
-            id: entry.id,
-            label,
-            company,
-            title,
-            attempts: entry.attempts || 0,
-            waitMs,
-            state,
-            nextAttemptAt: entry.nextAttemptAt || 0,
-            lastError: entry.lastError || "",
-          };
-        });
+            return {
+              id: entry.id,
+              label,
+              company,
+              title,
+              attempts: entry.attempts || 0,
+              waitMs,
+              state,
+              nextAttemptAt: entry.nextAttemptAt || 0,
+              lastError: entry.lastError || "",
+            };
+          });
 
-      sendResponse({
-        ok: true,
-        count: items.length,
-        processing: !!notionQueueWorkerInFlight,
-        items,
-      });
-    });
-    return true;
+        return {
+          ok: true,
+          count: items.length,
+          processing: !!notionQueueWorkerInFlight,
+          items,
+        };
+      })(),
+      sendResponse,
+      "Queue hors ligne - details"
+    );
   }
 
   if (msg?.type === "GCAL_GET_NOTIFY_PREFS") {
-    chrome.storage.local.get([GCAL_NOTIFY_TOGGLE_KEY], (data) => {
-      sendResponse({ ok: true, ids: data[GCAL_NOTIFY_TOGGLE_KEY] || [] });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const data = await chrome.storage.local.get([GCAL_NOTIFY_TOGGLE_KEY]);
+        return { ok: true, ids: data[GCAL_NOTIFY_TOGGLE_KEY] || [] };
+      })(),
+      sendResponse,
+      "Google Calendar - preferences notifications"
+    );
   }
 
   if (msg?.type === "GCAL_SET_NOTIFY_PREFS") {
-    const ids = Array.isArray(msg.payload?.ids) ? msg.payload.ids : [];
-    chrome.storage.local.set({ [GCAL_NOTIFY_TOGGLE_KEY]: ids }, () => {
-      sendResponse({ ok: true });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const ids = Array.isArray(msg.payload?.ids) ? msg.payload.ids : [];
+        await chrome.storage.local.set({ [GCAL_NOTIFY_TOGGLE_KEY]: ids });
+        return { ok: true };
+      })(),
+      sendResponse,
+      "Google Calendar - sauvegarde notifications"
+    );
   }
 
   if (msg?.type === "GCAL_GET_REMINDER_PREFS") {
-    chrome.storage.local.get([GCAL_REMINDER_PREFS_KEY], (data) => {
-      const prefs = normalizeReminderPrefs(data?.[GCAL_REMINDER_PREFS_KEY]);
-      sendResponse({ ok: true, prefs });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const data = await chrome.storage.local.get([GCAL_REMINDER_PREFS_KEY]);
+        const prefs = normalizeReminderPrefs(data?.[GCAL_REMINDER_PREFS_KEY]);
+        return { ok: true, prefs };
+      })(),
+      sendResponse,
+      "Google Calendar - preferences rappels"
+    );
   }
 
   if (msg?.type === "GCAL_SET_REMINDER_PREFS") {
-    const prefs = normalizeReminderPrefs(msg?.payload?.prefs);
-    chrome.storage.local.set({ [GCAL_REMINDER_PREFS_KEY]: prefs }, () => {
-      sendResponse({ ok: true, prefs });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const prefs = normalizeReminderPrefs(msg?.payload?.prefs);
+        await chrome.storage.local.set({ [GCAL_REMINDER_PREFS_KEY]: prefs });
+        return { ok: true, prefs };
+      })(),
+      sendResponse,
+      "Google Calendar - sauvegarde rappels"
+    );
   }
 
   if (msg?.type === "GCAL_SNOOZE_CUSTOM") {
@@ -5432,11 +6224,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "SET_YAHOO_PREFS") {
-    const prefs = msg.payload || {};
-    chrome.storage.local.set({ yahooNewsPrefs: prefs }, () => {
-      sendResponse({ ok: true });
-    });
-    return true;
+    return respondWith(
+      (async () => {
+        const prefs = msg.payload || {};
+        await chrome.storage.local.set({ yahooNewsPrefs: prefs });
+        return { ok: true };
+      })(),
+      sendResponse,
+      "Yahoo Prefs - sauvegarde"
+    );
   }
 
   if (msg?.type === "DIAG_GET_STATUS") {
@@ -5464,7 +6260,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   sendResponse({ ok: false, error: "Message inconnu." });
-  return true;
+  return false;
 });
 
 function createGcalNotification(notificationId, data) {
@@ -5518,12 +6314,15 @@ async function scheduleGcalSnooze(notificationId, minutes) {
   const { gcalEventMap } = await chrome.storage.local.get(["gcalEventMap"]);
   const source = gcalEventMap?.[notificationId];
   if (!source) return;
-  await chrome.storage.local.set({
-    [alarmName]: {
-      ...source,
-      snoozeMinutes: minutes,
-      sourceNotificationId: notificationId,
-    },
+  await setLocalWithQuotaGuard({
+    [alarmName]: buildStoredNotificationPayload(
+      {
+        ...source,
+        snoozeMinutes: minutes,
+        sourceNotificationId: notificationId,
+      },
+      "gcal-snooze"
+    ),
   });
   chrome.alarms.create(alarmName, { when });
 }
@@ -5543,7 +6342,9 @@ async function scheduleCustomGcalSnooze(payload) {
     link: payload?.link || "",
     eventType: payload?.eventType || "default",
   };
-  await chrome.storage.local.set({ [alarmName]: data });
+  await setLocalWithQuotaGuard({
+    [alarmName]: buildStoredNotificationPayload(data, "gcal-snooze"),
+  });
   chrome.alarms.create(alarmName, { when });
   return { ok: true };
 }
@@ -5578,6 +6379,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     chrome.storage.local.get([alarm.name], (data) => {
       const info = data[alarm.name];
       if (!info) return;
+      void setLocalWithQuotaGuard({
+        [alarm.name]: buildStoredNotificationPayload(
+          { ...info, notifiedAt: Date.now() },
+          "gcal-snooze"
+        ),
+      }).catch(() => {});
       createGcalNotification(alarm.name, info);
     });
     return;
@@ -5603,6 +6410,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     chrome.storage.local.get([alarm.name], (data) => {
       const info = data[alarm.name];
       if (!info) return;
+      void setLocalWithQuotaGuard({
+        [alarm.name]: buildStoredNotificationPayload(
+          { ...info, notifiedAt: Date.now() },
+          "deadline"
+        ),
+      }).catch(() => {});
       const title = `Deadline dans ${info.hours}h`;
       const message = `${info.summary} (${info.date})`;
       chrome.notifications.create(alarm.name, {
@@ -5620,13 +6433,19 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     const stageId = normalizeText(alarm.name.slice(INTERVIEW_ALARM_PREFIX.length) || "");
     const data = await chrome.storage.local.get([alarm.name]);
     const info = data?.[alarm.name] || {};
+    await setLocalWithQuotaGuard({
+      [alarm.name]: buildStoredNotificationPayload(
+        { ...info, notifiedAt: Date.now(), title: info.title || info.summary || "Entretien" },
+        "interview"
+      ),
+    }).catch(() => {});
     const message = info.when
       ? `Rappel entretien: ${new Date(info.when).toLocaleString()}`
       : "Rappel entretien";
     chrome.notifications.create(alarm.name, {
       type: "basic",
       iconUrl: "icons/icon-128.png",
-      title: info.title || "Entretien",
+      title: info.title || info.summary || "Entretien",
       message,
       priority: 2,
     });
@@ -5676,10 +6495,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     "gcalEventMap",
     "gcalNotified",
   ]);
-  const data = gcalEventMap?.[alarm.name];
+  const map = pruneGcalEventMap(gcalEventMap);
+  const data = map?.[alarm.name];
   if (!data) return;
 
-  const notified = gcalNotified || {};
+  const notified = pruneGcalNotifiedState(gcalNotified);
   const key = alarm.name;
   if (notified[key]) return;
 
@@ -5692,7 +6512,27 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   createGcalNotification(alarm.name, data);
 
   notified[key] = Date.now();
-  await chrome.storage.local.set({ gcalNotified: notified });
+  delete map[key];
+  await setLocalWithQuotaGuard(
+    {
+      gcalEventMap: pruneGcalEventMap(map),
+      [GCAL_NOTIFIED_KEY]: pruneGcalNotifiedState(notified),
+      [alarm.name]: buildStoredNotificationPayload(
+        { ...data, notifiedAt: Date.now() },
+        "gcal"
+      ),
+    },
+    {
+      retryPayload: () => ({
+        gcalEventMap: pruneGcalEventMap(map, { aggressive: true }),
+        [GCAL_NOTIFIED_KEY]: pruneGcalNotifiedState(notified, { aggressive: true }),
+        [alarm.name]: buildStoredNotificationPayload(
+          { ...data, notifiedAt: Date.now() },
+          "gcal"
+        ),
+      }),
+    }
+  );
 });
 
 async function flushOfflineQueue() {
@@ -5714,6 +6554,7 @@ if (chrome.declarativeNetRequest.onRuleMatchedDebug) {
 
 chrome.runtime.onInstalled.addListener(() => {
   seedDefaultConfig().catch(() => {});
+  runStorageMaintenance({ aggressive: true }).catch(() => {});
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });
@@ -5734,6 +6575,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
       if (link && chrome?.tabs?.create) {
         chrome.tabs.create({ url: link });
       }
+      void removeNotificationStorage(notificationId).catch(() => {});
     });
     return;
   }
@@ -5746,6 +6588,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
       } else if (chrome?.tabs?.create) {
         chrome.tabs.create({ url: "calendar.html" });
       }
+      void removeNotificationStorage(notificationId).catch(() => {});
     });
     return;
   }
@@ -5756,6 +6599,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
       if (link && chrome?.tabs?.create) {
         chrome.tabs.create({ url: link });
       }
+      void removeNotificationStorage(notificationId).catch(() => {});
     });
   }
 });
@@ -5768,6 +6612,7 @@ chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) =
   if (notificationId.startsWith(GCAL_ALARM_PREFIX)) {
     scheduleGcalSnooze(notificationId, minutes).catch(() => {});
     chrome.notifications.clear(notificationId);
+    void removeNotificationStorage(notificationId).catch(() => {});
     return;
   }
   if (notificationId.startsWith(GCAL_SNOOZE_ALARM_PREFIX)) {
@@ -5781,13 +6626,23 @@ chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) =
         eventType: info.eventType || "default",
         minutes,
       }).catch(() => {});
+      void removeNotificationStorage(notificationId).catch(() => {});
     });
+    chrome.notifications.clear(notificationId);
+    return;
   }
   chrome.notifications.clear(notificationId);
+  void removeNotificationStorage(notificationId).catch(() => {});
+});
+
+chrome.notifications.onClosed.addListener((notificationId) => {
+  if (!notificationId || !isAlarmBackedStorageKey(notificationId)) return;
+  void removeNotificationStorage(notificationId).catch(() => {});
 });
 
 chrome.runtime.onStartup.addListener(() => {
   seedDefaultConfig().catch(() => {});
+  runStorageMaintenance({ aggressive: true }).catch(() => {});
   chrome.alarms.create(GCAL_SYNC_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(YAHOO_NEWS_ALARM, { periodInMinutes: 15 });
   chrome.alarms.create(NOTION_SYNC_ALARM, { periodInMinutes: 60 });

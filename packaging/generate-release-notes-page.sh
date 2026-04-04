@@ -163,7 +163,7 @@ cat > "$output_path" <<HTML
   <main>
     <div class="eyebrow">Dashboard · ${UPDATE_CHANNEL} channel</div>
     <h1>Dev build ${UPDATE_VERSION} (${UPDATE_BUILD})</h1>
-    <p>This page is the browser-facing release note entry used by the in-app updater. Download the DMG, replace the installed app bundle, and relaunch.</p>
+    <p>This page is the signed release note entry used by Sparkle. The app can now install this build in place, while the direct DMG remains available as a fallback.</p>
 
     <section class="grid">
       <div class="card">

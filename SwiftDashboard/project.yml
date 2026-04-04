@@ -8,6 +8,11 @@ settings:
     SWIFT_VERSION: 5.10
     MARKETING_VERSION: 1.0.0
     CURRENT_PROJECT_VERSION: 1
+    SPARKLE_PUBLIC_ED_KEY: ""
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.9.1
 targets:
   NotionDashboard-iOS:
     type: application
@@ -37,6 +42,9 @@ targets:
     type: application
     platform: macOS
     deploymentTarget: "13.0"
+    dependencies:
+      - package: Sparkle
+        product: Sparkle
     sources:
       - path: Sources
     info:
@@ -51,8 +59,13 @@ targets:
               - com.googleusercontent.apps.608348086080-dp8647muci5st4em00pdgvrba75jq3db
         LSMinimumSystemVersion: "13.0"
         UpdateChannel: dev
-        UpdateManifestURL: https://ludovicstvys.github.io/Notion-Extension/update-dev.json
-        UpdateRepository: ludovicstvys/Notion-Extension
+        SUEnableAutomaticChecks: true
+        SUAllowsAutomaticUpdates: true
+        SUAutomaticallyUpdate: false
+        SUScheduledCheckInterval: 3600
+        SUFeedURL: https://ludovicstvys.github.io/Notion-Extension/appcast.xml
+        SUPublicEDKey: $(SPARKLE_PUBLIC_ED_KEY)
+        SURequireSignedFeed: true
     settings:
       base:
         PRODUCT_NAME: Dashboard

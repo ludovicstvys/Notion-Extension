@@ -181,7 +181,7 @@ struct SettingsView: View {
   private var updatesPanel: some View {
     WorkspacePanel(
       title: "Updates",
-      subtitle: "The macOS app polls the published dev manifest on GitHub Pages and opens the release DMG when a newer build exists.",
+      subtitle: "Sparkle now checks the signed appcast on GitHub Pages and can install newer macOS builds in place.",
       tint: .teal
     ) {
       VStack(alignment: .leading, spacing: 18) {
@@ -189,7 +189,7 @@ struct SettingsView: View {
           settingsMetric(title: "Installed", value: updateStore.currentVersion, detail: "marketing version", tint: .teal)
           settingsMetric(title: "Build", value: "\(updateStore.currentBuild)", detail: "local bundle build", tint: .orange)
           settingsMetric(title: "Channel", value: updateStore.channel.uppercased(), detail: "release stream", tint: .pink)
-          settingsMetric(title: "Last check", value: updateStore.lastCheckLabel, detail: "latest manifest poll", tint: .blue)
+          settingsMetric(title: "Last check", value: updateStore.lastCheckLabel, detail: "latest Sparkle run", tint: .blue)
         }
 
         Toggle(
@@ -200,6 +200,16 @@ struct SettingsView: View {
           )
         )
         .toggleStyle(.switch)
+
+        Toggle(
+          "Automatically download and install when possible",
+          isOn: Binding(
+            get: { updateStore.automaticDownloadsEnabled },
+            set: { updateStore.setAutomaticDownloadsEnabled($0) }
+          )
+        )
+        .toggleStyle(.switch)
+        .disabled(!updateStore.allowsAutomaticDownloads)
 
         VStack(alignment: .leading, spacing: 8) {
           panelLabel("Status")
@@ -214,12 +224,7 @@ struct SettingsView: View {
           .tint(.teal)
           .disabled(updateStore.state == .checking)
 
-          if updateStore.availableUpdate != nil {
-            Button("Download update") {
-              updateStore.openDownloadURL()
-            }
-            .buttonStyle(.bordered)
-
+          if updateStore.availableUpdate?.releaseNotesURL != nil {
             Button("Release notes") {
               updateStore.openReleaseNotesURL()
             }
@@ -231,7 +236,7 @@ struct SettingsView: View {
           VStack(alignment: .leading, spacing: 8) {
             panelLabel("Published build ready")
             panelMessage(
-              "\(availableUpdate.versionLabel) on channel \(availableUpdate.channel) was published \(availableUpdate.publishedAt.shortDateTime)."
+              "\(availableUpdate.versionLabel) on channel \(availableUpdate.channel) was published \(availableUpdate.publishedAt?.shortDateTime ?? "recently")."
             )
           }
         }

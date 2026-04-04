@@ -42,7 +42,6 @@
 		B3126E1AE032322BA1B278BC /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F279728D650243FAF285C3B8 /* Models.swift */; };
 		B3F6735010E845A13AA926D5 /* NotionDashboardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBF9B068D8AACDE70F104894 /* NotionDashboardApp.swift */; };
 		B4EC5F58CFBDC24631E5FCDF /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F139472C3746AA2440A2F26 /* CalendarView.swift */; };
-		B82B38F1C61539306CE8FE80 /* UpdateAvailableSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53AFCCEFD424FB02D68CF47C /* UpdateAvailableSheet.swift */; };
 		B844358458BB40833D4D93CA /* ConnectionsTextDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C09A021CC2E4C72DD9B91B0 /* ConnectionsTextDocument.swift */; };
 		C904F1E8F0692E9639A1FB06 /* View+Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEAEB7D327B73238DB8681A2 /* View+Platform.swift */; };
 		CCFB2C2DE1D31BDE86345389 /* MarketNewsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CD48C14722622AD5D0A397B /* MarketNewsStore.swift */; };
@@ -59,8 +58,8 @@
 		EBCE5E49088104F5AFF653F8 /* Date+Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74F93D3AC3E858B199D591C6 /* Date+Helpers.swift */; };
 		ED3A0C7249641437247532A3 /* FocusStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF22913667630F6A1D5066C2 /* FocusStore.swift */; };
 		EE6B62C35E04DC6071A0DF8A /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F139472C3746AA2440A2F26 /* CalendarView.swift */; };
-		EFAE500E564944F92CE4F401 /* UpdateAvailableSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53AFCCEFD424FB02D68CF47C /* UpdateAvailableSheet.swift */; };
 		F264B44333644CF4B53E1BA2 /* NotionDashboardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBF9B068D8AACDE70F104894 /* NotionDashboardApp.swift */; };
+		F363947593351C4F5E110FAE /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = B96624D65A2FBDA03E1189D0 /* Sparkle */; };
 		F6C83BFCEFAEAEC6E3F2BACA /* StageCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 438289F7A35B4CF5A073E423 /* StageCardView.swift */; };
 		F6E86DBCAF74C6C5DC96605E /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F279728D650243FAF285C3B8 /* Models.swift */; };
 		FCD3BEF0F37284757E241FCB /* UpdateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0CE65E51C36F68CFF550A46 /* UpdateStore.swift */; };
@@ -76,7 +75,6 @@
 		438289F7A35B4CF5A073E423 /* StageCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StageCardView.swift; sourceTree = "<group>"; };
 		4C09A021CC2E4C72DD9B91B0 /* ConnectionsTextDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionsTextDocument.swift; sourceTree = "<group>"; };
 		4F139472C3746AA2440A2F26 /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
-		53AFCCEFD424FB02D68CF47C /* UpdateAvailableSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAvailableSheet.swift; sourceTree = "<group>"; };
 		56D9219B20DF3DAC5E112FD1 /* StagesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StagesView.swift; sourceTree = "<group>"; };
 		65BB2F401B4B8476FE87163A /* ICSService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICSService.swift; sourceTree = "<group>"; };
 		6DB301B5FAA11F6C07AA07B7 /* NotionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionClient.swift; sourceTree = "<group>"; };
@@ -101,6 +99,17 @@
 		FEAEB7D327B73238DB8681A2 /* View+Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+Platform.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		6A89835BAE8EA9D1E5381A2F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F363947593351C4F5E110FAE /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
 		08BA1CEDD210C68CDC329F68 = {
 			isa = PBXGroup;
@@ -115,7 +124,6 @@
 			children = (
 				4C09A021CC2E4C72DD9B91B0 /* ConnectionsTextDocument.swift */,
 				438289F7A35B4CF5A073E423 /* StageCardView.swift */,
-				53AFCCEFD424FB02D68CF47C /* UpdateAvailableSheet.swift */,
 				FEAEB7D327B73238DB8681A2 /* View+Platform.swift */,
 				B3239F0AD2A525011A89B9A9 /* WorkspaceChrome.swift */,
 			);
@@ -220,6 +228,7 @@
 			buildConfigurationList = 6051A1559386284C46FBF1C4 /* Build configuration list for PBXNativeTarget "NotionDashboard-macOS" */;
 			buildPhases = (
 				BA3CDE9AE50DB234FC7E055E /* Sources */,
+				6A89835BAE8EA9D1E5381A2F /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -227,6 +236,7 @@
 			);
 			name = "NotionDashboard-macOS";
 			packageProductDependencies = (
+				B96624D65A2FBDA03E1189D0 /* Sparkle */,
 			);
 			productName = "NotionDashboard-macOS";
 			productReference = A802A0B5FDE842FF9FDD5877 /* NotionDashboard-macOS.app */;
@@ -256,6 +266,9 @@
 			);
 			mainGroup = 08BA1CEDD210C68CDC329F68;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				18FA0CFC52952D2A8065B91F /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			productRefGroup = 98C27D0711C40CC8475675D4 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -296,7 +309,6 @@
 				F6C83BFCEFAEAEC6E3F2BACA /* StageCardView.swift in Sources */,
 				3388D8C4ACFC350EEC5325FE /* StageStore.swift in Sources */,
 				7B0560FBA1373CEB2C099DCA /* StagesView.swift in Sources */,
-				B82B38F1C61539306CE8FE80 /* UpdateAvailableSheet.swift in Sources */,
 				993269764CEB5464CB005921 /* UpdateStore.swift in Sources */,
 				DA4F8EF9A1CDD309792E895F /* View+Platform.swift in Sources */,
 				A3052DDEB30AF65C28B08970 /* WorkspaceChrome.swift in Sources */,
@@ -332,7 +344,6 @@
 				02106A8C760D05756CC2E965 /* StageCardView.swift in Sources */,
 				245620D9C6C13DA4FE47A30A /* StageStore.swift in Sources */,
 				6057B882BE5C78C6F45D40DF /* StagesView.swift in Sources */,
-				EFAE500E564944F92CE4F401 /* UpdateAvailableSheet.swift in Sources */,
 				FCD3BEF0F37284757E241FCB /* UpdateStore.swift in Sources */,
 				C904F1E8F0692E9639A1FB06 /* View+Platform.swift in Sources */,
 				05AB055C3FAA1B46C9805E10 /* WorkspaceChrome.swift in Sources */,
@@ -418,6 +429,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SPARKLE_PUBLIC_ED_KEY = "";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.1;
@@ -531,6 +543,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SPARKLE_PUBLIC_ED_KEY = "";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.1;
@@ -568,6 +581,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		18FA0CFC52952D2A8065B91F /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B96624D65A2FBDA03E1189D0 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 18FA0CFC52952D2A8065B91F /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A01B0E33731B7D7F738476EB /* Project object */;
 }

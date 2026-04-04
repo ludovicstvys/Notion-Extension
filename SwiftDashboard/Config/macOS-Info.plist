@@ -33,11 +33,21 @@
 	</array>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://ludovicstvys.github.io/Notion-Extension/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>$(SPARKLE_PUBLIC_ED_KEY)</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
 	<key>UpdateChannel</key>
 	<string>dev</string>
-	<key>UpdateManifestURL</key>
-	<string>https://ludovicstvys.github.io/Notion-Extension/update-dev.json</string>
-	<key>UpdateRepository</key>
-	<string>ludovicstvys/Notion-Extension</string>
 </dict>
 </plist>

@@ -16,7 +16,7 @@ TOOLS_DIR="${ROOT_DIR}/.tools"
 XCODEGEN_CACHE_BIN="${TOOLS_DIR}/bin/xcodegen"
 XCODEGEN_SCRATCH_PATH="${XCODEGEN_SCRATCH_PATH:-/tmp/NotionDashboardXcodeGenBuild}"
 STAGING_DIR="$(mktemp -d /tmp/notion-dashboard-dmg.XXXXXX)"
-BUILD_LOG="$(mktemp /tmp/notion-dashboard-build.XXXXXX.log)"
+BUILD_LOG="$(mktemp -t notion-dashboard-build)"
 PRESERVE_BUILD_LOG="${PRESERVE_BUILD_LOG:-}"
 XCODEBUILD_OVERRIDES=()
 
@@ -26,6 +26,23 @@ fi
 
 if [[ -n "${CURRENT_PROJECT_VERSION_OVERRIDE:-}" ]]; then
   XCODEBUILD_OVERRIDES+=("CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION_OVERRIDE}")
+fi
+
+if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+  XCODEBUILD_OVERRIDES+=("SPARKLE_PUBLIC_ED_KEY=${SPARKLE_PUBLIC_ED_KEY}")
+fi
+
+if [[ -n "${APPLE_TEAM_ID:-}" ]]; then
+  XCODEBUILD_OVERRIDES+=("DEVELOPMENT_TEAM=${APPLE_TEAM_ID}")
+fi
+
+if [[ -n "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
+  XCODEBUILD_OVERRIDES+=("CODE_SIGN_IDENTITY=${APPLE_CODESIGN_IDENTITY}")
+fi
+
+if [[ "${ENABLE_CODE_SIGNING:-0}" == "1" ]]; then
+  XCODEBUILD_OVERRIDES+=("CODE_SIGN_STYLE=Manual")
+  XCODEBUILD_OVERRIDES+=("ENABLE_HARDENED_RUNTIME=YES")
 fi
 
 cleanup() {
@@ -92,18 +109,27 @@ cd "${SWIFT_DIR}"
 "${XCODEGEN}" generate --spec "${PROJECT_SPEC}" >/dev/null
 
 log "building macOS release app"
-if ! xcodebuild \
-  -project "${PROJECT_PATH}" \
-  -scheme "${APP_SCHEME}" \
-  -destination "platform=macOS,arch=arm64" \
-  -configuration Release \
-  -sdk macosx \
-  -derivedDataPath "${DERIVED_DATA_PATH}" \
-  CODE_SIGN_IDENTITY="" \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGNING_ALLOWED=NO \
-  "${XCODEBUILD_OVERRIDES[@]}" \
-  clean build >"${BUILD_LOG}" 2>&1; then
+xcodebuild_args=(
+  -project "${PROJECT_PATH}"
+  -scheme "${APP_SCHEME}"
+  -destination "platform=macOS,arch=arm64"
+  -configuration Release
+  -sdk macosx
+  -derivedDataPath "${DERIVED_DATA_PATH}"
+  "${XCODEBUILD_OVERRIDES[@]}"
+)
+
+if [[ "${ENABLE_CODE_SIGNING:-0}" != "1" ]]; then
+  xcodebuild_args+=(
+    CODE_SIGN_IDENTITY=""
+    CODE_SIGNING_REQUIRED=NO
+    CODE_SIGNING_ALLOWED=NO
+  )
+fi
+
+xcodebuild_args+=(clean build)
+
+if ! xcodebuild "${xcodebuild_args[@]}" >"${BUILD_LOG}" 2>&1; then
   cat "${BUILD_LOG}" >&2
   if [[ -n "${PRESERVE_BUILD_LOG}" ]]; then
     log "preserved build log: ${BUILD_LOG}"

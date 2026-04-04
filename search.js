@@ -47,21 +47,27 @@ function sendMessageAsync(message) {
   });
 }
 
+function trimStageDetailText(value, maxLength) {
+  const text = normalizeText(value || "");
+  if (!maxLength || text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
 function openStageDetail(item) {
   const detail = {
-    id: normalizeText(item.id || ""),
-    title: normalizeText(item.title || "Stage"),
-    company: normalizeText(item.company || ""),
-    type: normalizeText(item.typeValue || "Stage"),
-    status: normalizeText(item.status || ""),
-    closeDate: normalizeText(item.closeDate || ""),
-    location: normalizeText(item.location || ""),
-    role: normalizeText(item.role || ""),
-    openDate: normalizeText(item.openDate || ""),
-    applicationDate: normalizeText(item.applicationDate || ""),
-    startMonth: normalizeText(item.startMonth || ""),
-    url: normalizeText(item.url || item.link || ""),
-    notes: normalizeText(item.notes || ""),
+    id: trimStageDetailText(item.id, 96),
+    title: trimStageDetailText(item.title || "Stage", 220),
+    company: trimStageDetailText(item.company, 160),
+    type: trimStageDetailText(item.typeValue || "Stage", 120),
+    status: trimStageDetailText(item.status, 120),
+    closeDate: trimStageDetailText(item.closeDate, 40),
+    location: trimStageDetailText(item.location, 160),
+    role: trimStageDetailText(item.role, 160),
+    openDate: trimStageDetailText(item.openDate, 40),
+    applicationDate: trimStageDetailText(item.applicationDate, 40),
+    startMonth: trimStageDetailText(item.startMonth, 40),
+    url: trimStageDetailText(item.url || item.link || "", 2048),
+    notes: trimStageDetailText(item.notes, 2000),
   };
 
   const params = new URLSearchParams();
@@ -71,14 +77,14 @@ function openStageDetail(item) {
   params.set("deadline", detail.closeDate);
   params.set("link", detail.url);
   params.set("type", detail.type || "Stage");
-  params.set("notes", detail.notes);
+  if (!detail.id && detail.notes) {
+    params.set("notes", detail.notes);
+  }
 
-  chrome.storage.local.set(
-    { stageDetailId: detail.id, stageDetailFallback: detail },
-    () => {
-      window.open(`stage-detail.html?${params.toString()}`, "_blank", "noreferrer");
-    }
-  );
+  chrome.storage.local.set({ stageDetailId: detail.id, stageDetailFallback: detail }, () => {
+    chrome.runtime?.lastError;
+    window.open(`stage-detail.html?${params.toString()}`, "_blank", "noreferrer");
+  });
 }
 
 function renderResults(items) {

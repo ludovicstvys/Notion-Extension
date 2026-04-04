@@ -5,83 +5,23 @@ import SwiftUI
 import UIKit
 #elseif os(macOS)
 import AppKit
+import Sparkle
 #endif
 
-struct UpdateManifest: Codable, Hashable, Identifiable {
+struct UpdateManifest: Hashable, Identifiable {
   let channel: String
   let version: String
-  let build: Int
+  let build: String
   let minimumSystemVersion: String
-  let publishedAt: Date
-  let downloadURL: URL
-  let releaseNotesURL: URL
+  let publishedAt: Date?
+  let releaseNotesURL: URL?
 
   var id: String {
     "\(channel)-\(version)-\(build)"
   }
 
   var versionLabel: String {
-    "\(version) (\(build))"
-  }
-}
-
-private struct GitHubReleaseAsset: Decodable {
-  let name: String
-  let browserDownloadURL: URL
-
-  private enum CodingKeys: String, CodingKey {
-    case name
-    case browserDownloadURL = "browser_download_url"
-  }
-}
-
-private struct GitHubReleaseRecord: Decodable {
-  let tagName: String
-  let isDraft: Bool
-  let isPrerelease: Bool
-  let publishedAt: Date
-  let htmlURL: URL
-  let assets: [GitHubReleaseAsset]
-
-  private enum CodingKeys: String, CodingKey {
-    case tagName = "tag_name"
-    case isDraft = "draft"
-    case isPrerelease = "prerelease"
-    case publishedAt = "published_at"
-    case htmlURL = "html_url"
-    case assets
-  }
-}
-
-private struct ParsedReleaseTag {
-  let version: String
-  let channel: String
-  let build: Int
-
-  init?(_ rawValue: String) {
-    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard trimmed.hasPrefix("v") else { return nil }
-
-    let body = String(trimmed.dropFirst())
-    let segments = body.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
-    guard let versionSegment = segments.first, !versionSegment.isEmpty else { return nil }
-    let version = String(versionSegment)
-
-    if segments.count == 1 {
-      self.version = version
-      self.channel = "stable"
-      self.build = 0
-      return
-    }
-
-    let releaseDescriptor = String(segments[1])
-    let descriptorParts = releaseDescriptor.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
-    guard descriptorParts.count == 2 else { return nil }
-    guard let build = Int(descriptorParts[1]) else { return nil }
-
-    self.version = version
-    self.channel = String(descriptorParts[0])
-    self.build = build
+    build == version ? version : "\(version) (\(build))"
   }
 }
 
@@ -93,107 +33,84 @@ enum UpdateCheckState: Equatable {
   case error
 }
 
-struct AppSemanticVersion: Comparable, Hashable {
-  let components: [Int]
-
-  init?(_ rawValue: String) {
-    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-    let parts = trimmed.split(separator: ".", omittingEmptySubsequences: false)
-    guard !parts.isEmpty else { return nil }
-
-    var values: [Int] = []
-    values.reserveCapacity(parts.count)
-    for part in parts {
-      guard let value = Int(part) else { return nil }
-      values.append(value)
-    }
-    self.components = values
-  }
-
-  static func < (lhs: AppSemanticVersion, rhs: AppSemanticVersion) -> Bool {
-    let maxCount = max(lhs.components.count, rhs.components.count)
-    for index in 0..<maxCount {
-      let left = index < lhs.components.count ? lhs.components[index] : 0
-      let right = index < rhs.components.count ? rhs.components[index] : 0
-      if left != right {
-        return left < right
-      }
-    }
-    return false
-  }
-}
-
 enum UpdateStoreError: LocalizedError {
-  case missingManifestURL
-  case missingRepository
-  case invalidHTTPResponse
-  case httpStatus(Int)
-  case invalidVersion(String)
-  case noReleaseFound
-  case noReleaseAsset
+  case unsupportedPlatform
+  case missingFeedURL
+  case missingPublicKey
+  case updaterUnavailable
+  case unableToOpenReleaseNotes
 
   var errorDescription: String? {
     switch self {
-    case .missingManifestURL:
-      return "Update manifest URL is missing."
-    case .missingRepository:
-      return "Update repository is missing."
-    case .invalidHTTPResponse:
-      return "Update service returned an invalid response."
-    case let .httpStatus(code):
-      return code == 404 ? "Update channel is not published yet (HTTP 404)." : "Update service returned HTTP \(code)."
-    case let .invalidVersion(version):
-      return "Invalid update version: \(version)."
-    case .noReleaseFound:
-      return "No published update exists yet for this channel. Push `main` or publish a release first."
-    case .noReleaseAsset:
-      return "Published release does not contain a DMG asset."
+    case .unsupportedPlatform:
+      return "Sparkle updates are only available in the macOS app."
+    case .missingFeedURL:
+      return "Sparkle feed URL is missing from the app configuration."
+    case .missingPublicKey:
+      return "Sparkle public EdDSA key is missing. Set SPARKLE_PUBLIC_ED_KEY before publishing updates."
+    case .updaterUnavailable:
+      return "Sparkle updater is unavailable because the app is not configured yet."
+    case .unableToOpenReleaseNotes:
+      return "Release notes are not available for the latest appcast item."
     }
   }
 }
 
 @MainActor
-final class UpdateStore: ObservableObject {
+final class UpdateStore: NSObject, ObservableObject {
+  private let sparkleNoUpdateErrorCode = 1001
+
   @Published private(set) var state: UpdateCheckState = .idle
   @Published private(set) var availableUpdate: UpdateManifest?
-  @Published var presentedUpdate: UpdateManifest?
   @Published private(set) var lastCheckDate: Date?
-  @Published var automaticChecksEnabled: Bool
-  @Published private(set) var checkInterval: TimeInterval
-  @Published private(set) var lastErrorMessage: String = ""
+  @Published private(set) var automaticChecksEnabled = false
+  @Published private(set) var automaticDownloadsEnabled = false
+  @Published private(set) var allowsAutomaticDownloads = false
+  @Published private(set) var checkInterval: TimeInterval = 3600
+  @Published private(set) var lastErrorMessage = ""
 
-  private let defaults: UserDefaults
   private let bundle: Bundle
-  private let session: URLSession
   private weak var diagnostics: DiagnosticsStore?
-  private var didPerformLaunchCheck = false
 
-  private let automaticChecksKey = "swift_notion_dashboard_updates_auto_enabled_v1"
-  private let checkIntervalKey = "swift_notion_dashboard_updates_check_interval_v1"
-  private let lastCheckDateKey = "swift_notion_dashboard_updates_last_check_v1"
-  private let defaultCheckInterval: TimeInterval = 15 * 60
-  private let fallbackManifestURL = "https://ludovicstvys.github.io/Notion-Extension/update-dev.json"
-  private let fallbackChannel = "dev"
-  private let fallbackRepository = "ludovicstvys/Notion-Extension"
+#if os(macOS)
+  private var updaterController: SPUStandardUpdaterController?
+#endif
 
   init(
     diagnostics: DiagnosticsStore?,
-    defaults: UserDefaults = .standard,
-    bundle: Bundle = .main,
-    session: URLSession = .shared
+    bundle: Bundle = .main
   ) {
-    self.defaults = defaults
     self.bundle = bundle
-    self.session = session
     self.diagnostics = diagnostics
+    super.init()
 
-    let storedAutomaticChecks = defaults.object(forKey: automaticChecksKey) as? Bool
-    self.automaticChecksEnabled = storedAutomaticChecks ?? true
+#if os(macOS)
+    guard configurationIssue == nil else {
+      lastErrorMessage = configurationIssue ?? ""
+      state = .error
+      diagnostics?.log(
+        severity: .warning,
+        category: "updates",
+        message: "Sparkle configuration is incomplete.",
+        metadata: ["error": lastErrorMessage]
+      )
+      return
+    }
 
-    let storedInterval = defaults.object(forKey: checkIntervalKey) as? Double
-    self.checkInterval = storedInterval ?? defaultCheckInterval
+    let controller = SPUStandardUpdaterController(
+      startingUpdater: false,
+      updaterDelegate: self,
+      userDriverDelegate: nil
+    )
+    updaterController = controller
 
-    self.lastCheckDate = defaults.object(forKey: lastCheckDateKey) as? Date
+    // Sparkle prefers any feed URL persisted in defaults over Info.plist; clear old overrides.
+    _ = controller.updater.clearFeedURLFromUserDefaults()
+
+    refreshFromUpdater()
+    controller.startUpdater()
+    diagnostics?.log(category: "updates", message: "Sparkle updater started.")
+#endif
   }
 
   var currentVersion: String {
@@ -205,24 +122,27 @@ final class UpdateStore: ObservableObject {
   }
 
   var channel: String {
-    (bundle.object(forInfoDictionaryKey: "UpdateChannel") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-      .nonEmpty ?? fallbackChannel
-  }
-
-  var manifestURL: URL? {
-    let rawValue = (bundle.object(forInfoDictionaryKey: "UpdateManifestURL") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-      .nonEmpty ?? fallbackManifestURL
-    return URL(string: rawValue)
-  }
-
-  var repositoryIdentifier: String {
-    (bundle.object(forInfoDictionaryKey: "UpdateRepository") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-      .nonEmpty ?? fallbackRepository
+    (bundle.object(forInfoDictionaryKey: "UpdateChannel") as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .nonEmpty ?? "stable"
   }
 
   var minimumSystemVersion: String {
-    (bundle.object(forInfoDictionaryKey: "LSMinimumSystemVersion") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    (bundle.object(forInfoDictionaryKey: "LSMinimumSystemVersion") as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
       .nonEmpty ?? "13.0"
+  }
+
+  var sparkleFeedURL: URL? {
+    let rawValue = (bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .nonEmpty
+    return rawValue.flatMap(URL.init(string:))
+  }
+
+  var sparklePublicKey: String {
+    (bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
   }
 
   var currentVersionLabel: String {
@@ -230,7 +150,7 @@ final class UpdateStore: ObservableObject {
   }
 
   var checkIntervalLabel: String {
-    "\(Int(checkInterval / 60)) min"
+    Self.intervalLabel(for: checkInterval)
   }
 
   var lastCheckLabel: String {
@@ -248,222 +168,145 @@ final class UpdateStore: ObservableObject {
     case .updateAvailable:
       return "Update available"
     case .error:
-      return "Error"
+      return "Configuration"
     }
   }
 
   var detailMessage: String {
     switch state {
     case .idle:
-      return "Checks the latest dev build from GitHub Pages, then GitHub Releases if Pages is unavailable."
+      return "Sparkle is ready to monitor the published appcast."
     case .checking:
-      return "Looking for a newer published build."
+      return "Sparkle is checking the appcast and update pipeline."
     case .upToDate:
-      return "Current build \(currentVersionLabel) is the latest published version."
+      return "Current build \(currentVersionLabel) is the latest item Sparkle can install."
     case .updateAvailable:
-      return availableUpdate.map { "Version \($0.versionLabel) is available for download." } ?? "A newer build is available."
+      if let availableUpdate {
+        return "Version \(availableUpdate.versionLabel) is published and ready for Sparkle to install."
+      }
+      return "A newer build is published in the appcast."
     case .error:
-      return lastErrorMessage.isEmpty ? "Unable to check for updates." : lastErrorMessage
+      return lastErrorMessage.isEmpty ? "Sparkle is not configured yet." : lastErrorMessage
     }
   }
 
   func setAutomaticChecksEnabled(_ enabled: Bool) {
-    automaticChecksEnabled = enabled
-    defaults.set(enabled, forKey: automaticChecksKey)
+#if os(macOS)
+    guard let updater = updaterController?.updater else { return }
+    updater.automaticallyChecksForUpdates = enabled
+    refreshFromUpdater()
+    diagnostics?.log(
+      category: "updates",
+      message: "Updated automatic Sparkle checks.",
+      metadata: ["enabled": enabled ? "true" : "false"]
+    )
+#endif
+  }
+
+  func setAutomaticDownloadsEnabled(_ enabled: Bool) {
+#if os(macOS)
+    guard let updater = updaterController?.updater else { return }
+    updater.automaticallyDownloadsUpdates = enabled
+    refreshFromUpdater()
+    diagnostics?.log(
+      category: "updates",
+      message: "Updated Sparkle automatic downloads.",
+      metadata: ["enabled": enabled ? "true" : "false"]
+    )
+#endif
   }
 
   func performLaunchCheckIfNeeded() async {
-    guard isSupportedPlatform else { return }
-    guard !didPerformLaunchCheck else { return }
-    didPerformLaunchCheck = true
-    guard automaticChecksEnabled else { return }
-
-    if let lastCheckDate, Date().timeIntervalSince(lastCheckDate) < checkInterval {
-      return
-    }
-
-    await checkForUpdates(userInitiated: false)
+#if os(macOS)
+    refreshFromUpdater()
+#endif
   }
 
   func checkForUpdates(userInitiated: Bool) async {
-    guard isSupportedPlatform else { return }
-    guard manifestURL != nil else {
-      let error = UpdateStoreError.missingManifestURL
-      diagnostics?.log(severity: .warning, category: "updates", message: error.localizedDescription)
-      if userInitiated {
-        lastErrorMessage = error.localizedDescription
-        state = .error
-      }
+#if os(macOS)
+    guard configurationIssue == nil else {
+      let message = configurationIssue ?? UpdateStoreError.updaterUnavailable.localizedDescription
+      lastErrorMessage = message
+      state = .error
+      diagnostics?.log(
+        severity: .warning,
+        category: "updates",
+        message: "Sparkle check skipped because configuration is incomplete.",
+        metadata: ["error": message]
+      )
       return
     }
 
+    guard let updater = updaterController?.updater else {
+      let error = UpdateStoreError.updaterUnavailable
+      lastErrorMessage = error.localizedDescription
+      state = .error
+      diagnostics?.log(
+        severity: .warning,
+        category: "updates",
+        message: "Sparkle updater is unavailable.",
+        metadata: ["error": error.localizedDescription]
+      )
+      return
+    }
+
+    lastErrorMessage = ""
+    state = .checking
+    availableUpdate = nil
+
     if userInitiated {
-      state = .checking
-      lastErrorMessage = ""
+      updater.checkForUpdates()
+    } else {
+      updater.checkForUpdateInformation()
     }
-
-    do {
-      let manifest = try await loadLatestManifest()
-      persistLastCheckDate(Date())
-
-      if isManifestNewerThanCurrent(manifest) {
-        availableUpdate = manifest
-        presentedUpdate = manifest
-        state = .updateAvailable
-        diagnostics?.log(
-          category: "updates",
-          message: "Update available.",
-          metadata: [
-            "version": manifest.version,
-            "build": "\(manifest.build)",
-            "channel": manifest.channel,
-          ]
-        )
-      } else {
-        availableUpdate = nil
-        presentedUpdate = nil
-        state = .upToDate
-        if userInitiated {
-          diagnostics?.log(category: "updates", message: "No update available.")
-        }
-      }
-    } catch {
-      persistLastCheckDate(Date())
-      let message = Self.userFacingMessage(for: error)
-      diagnostics?.log(
-        severity: .warning,
-        category: "updates",
-        message: "Update check failed.",
-        metadata: ["error": message]
-      )
-      if userInitiated {
-        lastErrorMessage = message
-        state = .error
-      }
-    }
-  }
-
-  private func loadLatestManifest() async throws -> UpdateManifest {
-    guard let manifestURL else {
-      throw UpdateStoreError.missingManifestURL
-    }
-
-    do {
-      let manifest = try await fetchManifest(from: manifestURL)
-      diagnostics?.log(
-        category: "updates",
-        message: "Loaded update manifest from Pages.",
-        metadata: ["url": manifestURL.absoluteString]
-      )
-      return manifest
-    } catch {
-      diagnostics?.log(
-        severity: .warning,
-        category: "updates",
-        message: "Primary update manifest failed. Falling back to GitHub Releases.",
-        metadata: [
-          "url": manifestURL.absoluteString,
-          "error": Self.userFacingMessage(for: error),
-        ]
-      )
-      return try await fetchManifestFromGitHubReleases()
-    }
-  }
-
-  private func fetchManifest(from url: URL) async throws -> UpdateManifest {
-    var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-    let (data, response) = try await session.data(for: request)
-    guard let httpResponse = response as? HTTPURLResponse else {
-      throw UpdateStoreError.invalidHTTPResponse
-    }
-    guard (200..<300).contains(httpResponse.statusCode) else {
-      throw UpdateStoreError.httpStatus(httpResponse.statusCode)
-    }
-
-    let manifest = try Self.manifestDecoder.decode(UpdateManifest.self, from: data)
-    guard AppSemanticVersion(manifest.version) != nil else {
-      throw UpdateStoreError.invalidVersion(manifest.version)
-    }
-    return manifest
-  }
-
-  private func fetchManifestFromGitHubReleases() async throws -> UpdateManifest {
-    let repository = repositoryIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !repository.isEmpty else {
-      throw UpdateStoreError.missingRepository
-    }
-
-    guard let apiURL = URL(string: "https://api.github.com/repos/\(repository)/releases?per_page=20") else {
-      throw UpdateStoreError.invalidHTTPResponse
-    }
-
-    var request = URLRequest(url: apiURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
-    request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-
-    let (data, response) = try await session.data(for: request)
-    guard let httpResponse = response as? HTTPURLResponse else {
-      throw UpdateStoreError.invalidHTTPResponse
-    }
-    guard (200..<300).contains(httpResponse.statusCode) else {
-      throw UpdateStoreError.httpStatus(httpResponse.statusCode)
-    }
-
-    let releases = try Self.githubReleasesDecoder.decode([GitHubReleaseRecord].self, from: data)
-
-    var resolvedManifest: UpdateManifest?
-    for release in releases {
-      if let manifest = makeManifest(from: release) {
-        resolvedManifest = manifest
-        break
-      }
-    }
-
-    guard let resolvedManifest else {
-      throw UpdateStoreError.noReleaseFound
-    }
-
-    diagnostics?.log(
-      category: "updates",
-      message: "Loaded update metadata from GitHub Releases fallback.",
-      metadata: ["repository": repository, "version": resolvedManifest.versionLabel]
-    )
-    return resolvedManifest
-  }
-
-  private func makeManifest(from release: GitHubReleaseRecord) -> UpdateManifest? {
-    guard !release.isDraft else { return nil }
-
-    guard let parsedTag = ParsedReleaseTag(release.tagName) else { return nil }
-    guard parsedTag.channel == channel else { return nil }
-    guard channel != "dev" || release.isPrerelease || release.tagName.contains("-dev.") else { return nil }
-    guard AppSemanticVersion(parsedTag.version) != nil else { return nil }
-    guard let asset = release.assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") }) else { return nil }
-
-    return UpdateManifest(
-      channel: parsedTag.channel,
-      version: parsedTag.version,
-      build: parsedTag.build,
-      minimumSystemVersion: minimumSystemVersion,
-      publishedAt: release.publishedAt,
-      downloadURL: asset.browserDownloadURL,
-      releaseNotesURL: release.htmlURL
-    )
-  }
-
-  func dismissUpdate() {
-    presentedUpdate = nil
-  }
-
-  func openDownloadURL() {
-    guard let url = (presentedUpdate ?? availableUpdate)?.downloadURL else { return }
-    open(url: url, purpose: "download")
+#else
+    let error = UpdateStoreError.unsupportedPlatform
+    lastErrorMessage = error.localizedDescription
+    state = .error
+#endif
   }
 
   func openReleaseNotesURL() {
-    guard let url = (presentedUpdate ?? availableUpdate)?.releaseNotesURL else { return }
+    guard let url = availableUpdate?.releaseNotesURL else {
+      lastErrorMessage = UpdateStoreError.unableToOpenReleaseNotes.localizedDescription
+      state = .error
+      return
+    }
+
     open(url: url, purpose: "release-notes")
+  }
+
+  private var configurationIssue: String? {
+    if sparkleFeedURL == nil {
+      return UpdateStoreError.missingFeedURL.localizedDescription
+    }
+    if sparklePublicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return UpdateStoreError.missingPublicKey.localizedDescription
+    }
+    return nil
+  }
+
+  private func refreshFromUpdater() {
+#if os(macOS)
+    guard let updater = updaterController?.updater else { return }
+    automaticChecksEnabled = updater.automaticallyChecksForUpdates
+    automaticDownloadsEnabled = updater.automaticallyDownloadsUpdates
+    allowsAutomaticDownloads = updater.allowsAutomaticUpdates
+    checkInterval = updater.updateCheckInterval
+    lastCheckDate = updater.lastUpdateCheckDate
+
+    if updater.sessionInProgress {
+      state = .checking
+    } else if !lastErrorMessage.isEmpty {
+      state = .error
+    } else if availableUpdate != nil {
+      state = .updateAvailable
+    } else if lastCheckDate != nil {
+      state = .upToDate
+    } else {
+      state = .idle
+    }
+#endif
   }
 
   private func open(url: URL, purpose: String) {
@@ -474,7 +317,7 @@ final class UpdateStore: ObservableObject {
 #endif
     diagnostics?.log(
       category: "updates",
-      message: "Opened update URL.",
+      message: "Opened Sparkle URL.",
       metadata: [
         "purpose": purpose,
         "url": url.absoluteString,
@@ -482,60 +325,111 @@ final class UpdateStore: ObservableObject {
     )
   }
 
-  private func persistLastCheckDate(_ date: Date) {
-    lastCheckDate = date
-    defaults.set(date, forKey: lastCheckDateKey)
+  private func setAvailableUpdate(_ item: UpdateManifest?) {
+    availableUpdate = item
+    if item != nil {
+      state = .updateAvailable
+    } else if lastErrorMessage.isEmpty {
+      state = lastCheckDate == nil ? .idle : .upToDate
+    }
   }
 
-  private func isManifestNewerThanCurrent(_ manifest: UpdateManifest) -> Bool {
-    if let remoteVersion = AppSemanticVersion(manifest.version), let localVersion = AppSemanticVersion(currentVersion) {
-      if remoteVersion != localVersion {
-        return remoteVersion > localVersion
+  private func handleCheckError(_ error: Error?) {
+    refreshFromUpdater()
+
+    guard let error else {
+      lastErrorMessage = ""
+      if availableUpdate == nil {
+        state = lastCheckDate == nil ? .idle : .upToDate
       }
+      return
     }
-    return manifest.build > currentBuild
+
+    let nsError = error as NSError
+    if nsError.domain == SUSparkleErrorDomain && nsError.code == sparkleNoUpdateErrorCode {
+      lastErrorMessage = ""
+      state = .upToDate
+      return
+    }
+
+    lastErrorMessage = nsError.localizedDescription
+    state = .error
+    diagnostics?.log(
+      severity: .warning,
+      category: "updates",
+      message: "Sparkle cycle finished with an error.",
+      metadata: ["error": nsError.localizedDescription]
+    )
   }
 
-  private var isSupportedPlatform: Bool {
-#if os(macOS)
-    true
-#else
-    false
-#endif
-  }
-
-  private static let manifestDecoder: JSONDecoder = {
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .custom { decoder in
-      let container = try decoder.singleValueContainer()
-      let rawValue = try container.decode(String.self)
-      if let date = Date.iso8601WithFractionalSeconds.date(from: rawValue) {
-        return date
-      }
-      if let date = Date.fallbackISO8601.date(from: rawValue) {
-        return date
-      }
-      throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ISO8601 date: \(rawValue)")
+  private static func intervalLabel(for interval: TimeInterval) -> String {
+    let minutes = Int(interval / 60)
+    if minutes < 60 {
+      return "\(minutes) min"
     }
-    return decoder
-  }()
 
-  private static let githubReleasesDecoder: JSONDecoder = {
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
-    return decoder
-  }()
+    let hours = Int(interval / 3600)
+    if hours < 24 {
+      return hours == 1 ? "1 hour" : "\(hours) hours"
+    }
 
-  private static func userFacingMessage(for error: Error) -> String {
-    if let updateError = error as? UpdateStoreError {
-      return updateError.localizedDescription
-    }
-    if let decodingError = error as? DecodingError {
-      return "Update manifest is invalid: \(decodingError.localizedDescription)"
-    }
-    return error.localizedDescription
+    let days = Int(interval / 86_400)
+    return days == 1 ? "1 day" : "\(days) days"
   }
 }
+
+#if os(macOS)
+extension UpdateStore: SPUUpdaterDelegate {
+  func allowedChannels(for updater: SPUUpdater) -> Set<String> {
+    let currentChannel = channel.lowercased()
+    guard currentChannel != "stable", currentChannel != "default" else {
+      return []
+    }
+    return [currentChannel]
+  }
+
+  func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+    let manifest = UpdateManifest(
+      channel: channel,
+      version: item.displayVersionString.nonEmpty ?? item.versionString,
+      build: item.versionString,
+      minimumSystemVersion: item.minimumSystemVersion ?? minimumSystemVersion,
+      publishedAt: item.date,
+      releaseNotesURL: item.releaseNotesURL
+    )
+    setAvailableUpdate(manifest)
+    lastErrorMessage = ""
+    lastCheckDate = updater.lastUpdateCheckDate
+    diagnostics?.log(
+      category: "updates",
+      message: "Sparkle found a valid update.",
+      metadata: [
+        "version": manifest.version,
+        "build": manifest.build,
+        "channel": manifest.channel,
+      ]
+    )
+  }
+
+  func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+    setAvailableUpdate(nil)
+    lastCheckDate = updater.lastUpdateCheckDate
+    lastErrorMessage = ""
+    state = .upToDate
+    diagnostics?.log(category: "updates", message: "Sparkle did not find a newer update.")
+  }
+
+  func updater(_ updater: SPUUpdater, didNotFindUpdate error: Error) {
+    lastCheckDate = updater.lastUpdateCheckDate
+    handleCheckError(error)
+  }
+
+  func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+    lastCheckDate = updater.lastUpdateCheckDate
+    handleCheckError(error)
+  }
+}
+#endif
 
 private extension String {
   var nonEmpty: String? {

@@ -82,15 +82,6 @@ struct RootView: View {
       async let notionBootstrap: Void = stageStore.prepareForLaunch()
       _ = await (updateCheck, notionBootstrap)
     }
-    .sheet(
-      item: Binding(
-        get: { updateStore.presentedUpdate },
-        set: { updateStore.presentedUpdate = $0 }
-      )
-    ) { manifest in
-      UpdateAvailableSheet(manifest: manifest)
-        .environmentObject(updateStore)
-    }
   }
 
   @ViewBuilder

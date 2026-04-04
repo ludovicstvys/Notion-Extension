@@ -487,19 +487,7 @@ function renderKanban() {
         kanbanStatus = col.label;
       });
       card.addEventListener("dragend", () => card.classList.remove("dragging"));
-      card.addEventListener("click", () => {
-        if (!item.id) return;
-        const params = new URLSearchParams();
-        params.set("id", item.id);
-        params.set("title", normalizeText([item.company, item.title].filter(Boolean).join(" - ")));
-        params.set("status", item.status || "");
-        params.set("deadline", item.closeDate || "");
-        params.set("link", item.url || "");
-        params.set("type", "Stage");
-        chrome.storage.local.set({ stageDetailId: item.id || "", stageDetailFallback: item }, () => {
-          window.open(`stage-detail.html?${params.toString()}`, "_blank", "noreferrer");
-        });
-      });
+      card.addEventListener("click", () => openStageDetail(item));
 
       cardsFrag.appendChild(card);
     });
@@ -696,29 +684,50 @@ function loadOpenStages() {
   renderOpenStages(items);
 }
 
-function openStageDetail(item) {
-  const detail = {
-    title: normalizeText([item.company, item.title].filter(Boolean).join(" - ")) || "Stage",
-    meta: "Stage",
-    deadline: item.closeDate || "",
-    status: item.status || "",
-    link: item.url || "",
-    type: "Stage",
-    notes: item.notes || "",
+function trimStageDetailText(value, maxLength) {
+  const text = normalizeText(value || "");
+  if (!maxLength || text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function buildStageDetailFallback(item) {
+  return {
+    id: trimStageDetailText(item?.id, 96),
+    title:
+      trimStageDetailText(
+        normalizeText([item?.company, item?.title].filter(Boolean).join(" - ")),
+        220
+      ) || "Stage",
+    company: trimStageDetailText(item?.company, 160),
+    type: trimStageDetailText(item?.type, 120),
+    status: trimStageDetailText(item?.status, 120),
+    closeDate: trimStageDetailText(item?.closeDate, 40),
+    url: trimStageDetailText(item?.url || item?.link, 2048),
+    location: trimStageDetailText(item?.location, 160),
+    role: trimStageDetailText(item?.role, 160),
+    openDate: trimStageDetailText(item?.openDate, 40),
+    applicationDate: trimStageDetailText(item?.applicationDate, 40),
+    startMonth: trimStageDetailText(item?.startMonth, 40),
+    notes: trimStageDetailText(item?.notes, 2000),
   };
+}
+
+function openStageDetail(item) {
+  const detail = buildStageDetailFallback(item);
   const params = new URLSearchParams();
   if (item.id) params.set("id", item.id);
   params.set("title", detail.title);
   params.set("status", detail.status);
-  params.set("deadline", detail.deadline);
-  params.set("link", detail.link);
+  params.set("deadline", detail.closeDate);
+  params.set("link", detail.url);
   params.set("type", detail.type);
-  chrome.storage.local.set(
-    { stageDetailId: item.id || "", stageDetailFallback: detail },
-    () => {
-      window.open(`stage-detail.html?${params.toString()}`, "_blank", "noreferrer");
-    }
-  );
+  if (!detail.id && detail.notes) {
+    params.set("notes", detail.notes);
+  }
+  chrome.storage.local.set({ stageDetailId: item.id || "", stageDetailFallback: detail }, () => {
+    chrome.runtime?.lastError;
+    window.open(`stage-detail.html?${params.toString()}`, "_blank", "noreferrer");
+  });
 }
 
 function renderAllStages(items) {
