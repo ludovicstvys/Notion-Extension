@@ -1,2 +1,0 @@
-Target dependency graph (1 target)
-Target 'NotionDashboard-macOS' in project 'NotionDashboardSwift' (no dependencies)

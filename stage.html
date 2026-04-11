@@ -236,6 +236,14 @@
         color: #ffd5d1;
         border-color: rgba(255, 69, 58, 0.8);
       }
+      .quick-btn-primary {
+        border-color: rgba(56, 189, 248, 0.4);
+        background: rgba(56, 189, 248, 0.12);
+        color: #bfe7ff;
+      }
+      .quick-btn-primary:hover {
+        border-color: rgba(56, 189, 248, 0.75);
+      }
       .stage-row a {
         color: var(--accent);
         text-decoration: none;
@@ -449,6 +457,102 @@
         font-size: 12px;
         color: var(--muted);
       }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: rgba(2, 6, 23, 0.7);
+        backdrop-filter: blur(6px);
+        z-index: 20;
+      }
+      .modal-backdrop.open {
+        display: flex;
+      }
+      .modal-card {
+        width: min(760px, 100%);
+        max-height: min(88vh, 860px);
+        overflow: auto;
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(11, 19, 36, 0.96));
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 24px 60px rgba(2, 6, 23, 0.55);
+      }
+      .modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .modal-title {
+        margin: 0;
+        font-size: 20px;
+      }
+      .modal-close {
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.7);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 6px 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .stage-edit-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .stage-edit-field {
+        display: grid;
+        gap: 6px;
+      }
+      .stage-edit-field.full {
+        grid-column: 1 / -1;
+      }
+      .stage-edit-field label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .stage-edit-input,
+      .stage-edit-textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: rgba(11, 19, 36, 0.7);
+        color: var(--text);
+        font-size: 13px;
+        font-family: inherit;
+      }
+      .stage-edit-textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+      .stage-edit-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 16px;
+      }
+      .stage-edit-status {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .stage-edit-buttons {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      @media (max-width: 720px) {
+        .stage-edit-grid {
+          grid-template-columns: 1fr;
+        }
+      }
       .kanban-hidden { display: none; }    </style>
   </head>
   <body>
@@ -532,9 +636,76 @@
         <div class="kanban-board" id="kanban-board"></div>
       </div>
     </section>
-
+    <div class="modal-backdrop" id="stage-edit-modal" aria-hidden="true">
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="stage-edit-title">
+        <div class="modal-head">
+          <div>
+            <h2 class="modal-title" id="stage-edit-title">Modifier le stage</h2>
+            <p class="note" id="stage-edit-subtitle">Mise à jour des informations stockées dans Notion.</p>
+          </div>
+          <button class="modal-close" id="stage-edit-close" type="button">Fermer</button>
+        </div>
+        <form id="stage-edit-form">
+          <div class="stage-edit-grid">
+            <div class="stage-edit-field">
+              <label for="stage-edit-company">Entreprise</label>
+              <input class="stage-edit-input" id="stage-edit-company" name="company" type="text" />
+            </div>
+            <div class="stage-edit-field">
+              <label for="stage-edit-title-input">Titre</label>
+              <input class="stage-edit-input" id="stage-edit-title-input" name="title" type="text" />
+            </div>
+            <div class="stage-edit-field">
+              <label for="stage-edit-status-input">Status</label>
+              <select class="stage-edit-input" id="stage-edit-status-input" name="status"></select>
+            </div>
+            <div class="stage-edit-field">
+              <label for="stage-edit-type">Type</label>
+              <input class="stage-edit-input" id="stage-edit-type" name="type" type="text" />
+            </div>
+            <div class="stage-edit-field">
+              <label for="stage-edit-location">Lieu</label>
+              <input class="stage-edit-input" id="stage-edit-location" name="location" type="text" />
+            </div>
+            <div class="stage-edit-field">
+              <label for="stage-edit-role">Role</label>
+              <input class="stage-edit-input" id="stage-edit-role" name="role" type="text" />
+            </div>
+            <div class="stage-edit-field full">
+              <label for="stage-edit-url">Lien</label>
+              <input class="stage-edit-input" id="stage-edit-url" name="url" type="url" />
+            </div>
+            <div class="stage-edit-field">
+              <label for="stage-edit-open-date">Date d'ouverture</label>
+              <input class="stage-edit-input" id="stage-edit-open-date" name="openDate" type="text" />
+            </div>
+            <div class="stage-edit-field">
+              <label for="stage-edit-application-date">Date de candidature</label>
+              <input class="stage-edit-input" id="stage-edit-application-date" name="applicationDate" type="text" />
+            </div>
+            <div class="stage-edit-field">
+              <label for="stage-edit-close-date">Date de fermeture</label>
+              <input class="stage-edit-input" id="stage-edit-close-date" name="closeDate" type="text" />
+            </div>
+            <div class="stage-edit-field">
+              <label for="stage-edit-start-month">Start month</label>
+              <input class="stage-edit-input" id="stage-edit-start-month" name="startMonth" type="text" />
+            </div>
+            <div class="stage-edit-field full">
+              <label for="stage-edit-notes">Notes</label>
+              <textarea class="stage-edit-textarea" id="stage-edit-notes" name="notes"></textarea>
+            </div>
+          </div>
+          <div class="stage-edit-actions">
+            <div class="stage-edit-status" id="stage-edit-status"></div>
+            <div class="stage-edit-buttons">
+              <button class="stage-open-toggle" id="stage-edit-cancel" type="button">Annuler</button>
+              <button class="quick-btn quick-btn-primary" id="stage-edit-save" type="submit">Enregistrer</button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
     <script src="stage.js"></script>
   </body>
 </html>
-
-

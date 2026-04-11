@@ -18,6 +18,13 @@ const stageKpiWeekEl = document.getElementById("stage-kpi-week");
 const stageKpiListEl = document.getElementById("stage-kpi-list");
 const stageSyncTextEl = document.getElementById("stage-sync-text");
 const stageRefreshBtn = document.getElementById("stage-refresh-btn");
+const stageEditModalEl = document.getElementById("stage-edit-modal");
+const stageEditFormEl = document.getElementById("stage-edit-form");
+const stageEditCloseBtn = document.getElementById("stage-edit-close");
+const stageEditCancelBtn = document.getElementById("stage-edit-cancel");
+const stageEditSaveBtn = document.getElementById("stage-edit-save");
+const stageEditStatusEl = document.getElementById("stage-edit-status");
+const stageEditSubtitleEl = document.getElementById("stage-edit-subtitle");
 
 let stats = null;
 let segments = [];
@@ -28,6 +35,8 @@ let stageDashboardSnapshot = null;
 let filteredStages = [];
 let allStagesRenderCount = 0;
 let dashboardFollowupTimer = null;
+let stageBeingEdited = null;
+let stageStatusOptionsCache = null;
 
 const KANBAN_COLUMNS = [
   { key: "ouvert", label: "Ouvert" },
@@ -136,6 +145,206 @@ function debounce(fn, waitMs = 120) {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => fn(...args), waitMs);
   };
+}
+
+function getStageEditField(name) {
+  return stageEditFormEl?.elements?.namedItem(name) || null;
+}
+
+function setStageEditBusy(isBusy, statusText = "") {
+  if (stageEditSaveBtn) stageEditSaveBtn.disabled = isBusy;
+  if (stageEditCloseBtn) stageEditCloseBtn.disabled = isBusy;
+  if (stageEditCancelBtn) stageEditCancelBtn.disabled = isBusy;
+  if (stageEditStatusEl) stageEditStatusEl.textContent = statusText;
+}
+
+function renderStageStatusOptions(options, selectedValue = "") {
+  const statusField = getStageEditField("status");
+  if (!statusField) return;
+  const normalizedSelected = normalizeText(selectedValue || "");
+  const baseOptions = Array.isArray(options) ? options.map((value) => normalizeText(value)).filter(Boolean) : [];
+  const uniqueOptions = Array.from(new Set(baseOptions));
+  if (normalizedSelected && !uniqueOptions.includes(normalizedSelected)) {
+    uniqueOptions.unshift(normalizedSelected);
+  }
+  statusField.innerHTML = "";
+  if (!uniqueOptions.length) {
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "Aucun statut disponible";
+    statusField.appendChild(emptyOption);
+    return;
+  }
+  uniqueOptions.forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    if (value === normalizedSelected) {
+      option.selected = true;
+    }
+    statusField.appendChild(option);
+  });
+}
+
+function loadStageStatusOptions(force = false) {
+  if (!force && Array.isArray(stageStatusOptionsCache) && stageStatusOptionsCache.length) {
+    return Promise.resolve(stageStatusOptionsCache.slice());
+  }
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "GET_STAGE_STATUS_OPTIONS" }, (res) => {
+      if (chrome.runtime.lastError) {
+        resolve([]);
+        return;
+      }
+      if (!res?.ok || !Array.isArray(res.options)) {
+        resolve([]);
+        return;
+      }
+      stageStatusOptionsCache = res.options.slice();
+      resolve(stageStatusOptionsCache.slice());
+    });
+  });
+}
+
+function fillStageEditForm(item) {
+  [
+    "company",
+    "title",
+    "type",
+    "location",
+    "role",
+    "url",
+    "openDate",
+    "applicationDate",
+    "closeDate",
+    "startMonth",
+    "notes",
+  ].forEach((key) => {
+    const field = getStageEditField(key);
+    if (!field) return;
+    field.value = normalizeText(item?.[key] || "");
+  });
+  renderStageStatusOptions(stageStatusOptionsCache || [], item?.status || "");
+}
+
+function openStageEditModal(item) {
+  if (!stageEditModalEl || !stageEditFormEl || !item?.id) return;
+  stageBeingEdited = { ...item };
+  fillStageEditForm(stageBeingEdited);
+  if (stageEditSubtitleEl) {
+    stageEditSubtitleEl.textContent =
+      normalizeText([item.company, item.title].filter(Boolean).join(" - ")) ||
+      "Mise à jour des informations stockées dans Notion.";
+  }
+  setStageEditBusy(false, "");
+  stageEditModalEl.classList.add("open");
+  stageEditModalEl.setAttribute("aria-hidden", "false");
+  const firstField = getStageEditField("company") || getStageEditField("title");
+  firstField?.focus();
+}
+
+function startStageEdit(item) {
+  if (!item?.id) return;
+  openStageEditModal(item);
+  setStageEditBusy(true, "Chargement du stage...");
+  loadStageStatusOptions(false).then((options) => {
+    stageStatusOptionsCache = options.slice();
+    chrome.runtime.sendMessage({ type: "GET_STAGE_BY_ID", payload: { id: item.id } }, (res) => {
+      if (chrome.runtime.lastError) {
+        setStageEditBusy(false, `Erreur: ${chrome.runtime.lastError.message}`);
+        return;
+      }
+      if (res?.ok && res.item) {
+        stageBeingEdited = { ...res.item };
+        fillStageEditForm(stageBeingEdited);
+        if (stageEditSubtitleEl) {
+          stageEditSubtitleEl.textContent =
+            normalizeText([res.item.company, res.item.title].filter(Boolean).join(" - ")) ||
+            "Mise à jour des informations stockées dans Notion.";
+        }
+        setStageEditBusy(false, "");
+        return;
+      }
+      setStageEditBusy(false, res?.error ? `Erreur: ${res.error}` : "Chargement partiel.");
+    });
+  });
+}
+
+function closeStageEditModal() {
+  if (!stageEditModalEl) return;
+  stageEditModalEl.classList.remove("open");
+  stageEditModalEl.setAttribute("aria-hidden", "true");
+  stageBeingEdited = null;
+  setStageEditBusy(false, "");
+  if (stageEditFormEl) stageEditFormEl.reset();
+}
+
+function collectStageEditPayload() {
+  const payload = { id: stageBeingEdited?.id || "" };
+  [
+    "company",
+    "title",
+    "status",
+    "type",
+    "location",
+    "role",
+    "url",
+    "openDate",
+    "applicationDate",
+    "closeDate",
+    "startMonth",
+    "notes",
+  ].forEach((key) => {
+    const field = getStageEditField(key);
+    payload[key] = normalizeText(field?.value || "");
+  });
+  return payload;
+}
+
+function mergeUpdatedStageInState(updatedStage) {
+  if (!updatedStage?.id) return;
+  allStages = allStages.map((stage) => (stage.id === updatedStage.id ? { ...stage, ...updatedStage } : stage));
+  rebuildStageSearchIndex();
+  applyAllStagesFilter({ reset: false });
+  renderKanban();
+  stageDashboardSnapshot = {
+    ...(stageDashboardSnapshot || {}),
+    allStages: allStages.slice(),
+    openStages: allStages.filter((s) => isOpenStageStatus(s.status)),
+    stats: computeStatsFromItems(allStages),
+    stale: true,
+  };
+  renderOpenStages(stageDashboardSnapshot.openStages);
+  loadStats();
+}
+
+function saveEditedStage() {
+  const payload = collectStageEditPayload();
+  if (!payload.id) {
+    setStageEditBusy(false, "Impossible sans ID.");
+    return;
+  }
+  if (!payload.title && !payload.company) {
+    setStageEditBusy(false, "Renseigne au moins un titre ou une entreprise.");
+    return;
+  }
+  setStageEditBusy(true, "Enregistrement...");
+  chrome.runtime.sendMessage({ type: "UPDATE_STAGE_FIELDS", payload }, (res) => {
+    if (chrome.runtime.lastError) {
+      setStageEditBusy(false, `Erreur: ${chrome.runtime.lastError.message}`);
+      return;
+    }
+    if (!res?.ok || !res?.item) {
+      setStageEditBusy(false, `Erreur: ${res?.error || "mise a jour impossible"}`);
+      return;
+    }
+    mergeUpdatedStageInState(res.item);
+    closeStageEditModal();
+    if (openStatusEl) {
+      openStatusEl.textContent = "Stage mis a jour.";
+    }
+    queueDashboardRefresh(250);
+  });
 }
 
 function buildStageSearchKey(item) {
@@ -646,6 +855,17 @@ function renderOpenStages(items) {
     }
 
     if (item.id) {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "quick-btn quick-btn-primary";
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        startStageEdit(item);
+      });
+      editBtn.addEventListener("keydown", (e) => e.stopPropagation());
+      actions.appendChild(editBtn);
+
       const deleteBtn = document.createElement("button");
       deleteBtn.type = "button";
       deleteBtn.className = "quick-btn quick-btn-danger";
@@ -976,6 +1196,35 @@ loadStageDashboard({ allowStale: true });
 if (allSearchEl) {
   const onSearch = debounce(() => applyAllStagesFilter({ reset: true }), 120);
   allSearchEl.addEventListener("input", onSearch);
+}
+
+if (stageEditCloseBtn) {
+  stageEditCloseBtn.addEventListener("click", closeStageEditModal);
+}
+
+if (stageEditCancelBtn) {
+  stageEditCancelBtn.addEventListener("click", closeStageEditModal);
+}
+
+if (stageEditModalEl) {
+  stageEditModalEl.addEventListener("click", (e) => {
+    if (e.target === stageEditModalEl) {
+      closeStageEditModal();
+    }
+  });
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && stageEditModalEl?.classList.contains("open") && !stageEditSaveBtn?.disabled) {
+    closeStageEditModal();
+  }
+});
+
+if (stageEditFormEl) {
+  stageEditFormEl.addEventListener("submit", (e) => {
+    e.preventDefault();
+    saveEditedStage();
+  });
 }
 
 if (stageRefreshBtn) {

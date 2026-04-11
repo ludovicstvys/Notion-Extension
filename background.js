@@ -2927,6 +2927,119 @@ async function updateStageNotes(payload) {
   return { ok: true };
 }
 
+function buildStageTextProperty(prop, value) {
+  const text = normalizeText(value || "");
+  if (!prop?.type) return null;
+  if (prop.type === "title") {
+    return { title: text ? [{ text: { content: text } }] : [] };
+  }
+  if (prop.type === "rich_text") {
+    return { rich_text: text ? [{ text: { content: text } }] : [] };
+  }
+  if (prop.type === "url") {
+    return { url: text || null };
+  }
+  if (prop.type === "date") {
+    const parsed = parseDateFromText(text);
+    return { date: parsed ? { start: parsed } : null };
+  }
+  if (prop.type === "select") {
+    return { select: text ? { name: text } : null };
+  }
+  if (prop.type === "status") {
+    return { status: text ? { name: text } : null };
+  }
+  return null;
+}
+
+function buildStageRoleProperty(prop, value) {
+  const text = normalizeText(value || "");
+  if (!prop?.type) return null;
+  if (prop.type === "multi_select") {
+    const values = text
+      .split(",")
+      .map((entry) => normalizeText(entry))
+      .filter(Boolean);
+    return { multi_select: values.map((name) => ({ name })) };
+  }
+  return buildStageTextProperty(prop, text);
+}
+
+async function updateStageFields(payload) {
+  const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
+    "notionToken",
+    "notionDbId",
+  ]);
+  const { notionFieldMap } = await chrome.storage.sync.get(["notionFieldMap"]);
+  const map = notionFieldMap || {};
+
+  if (!token || !dbId) throw new Error("Config Notion manquante (Options).");
+  const pageId = normalizeText(payload?.id || "");
+  if (!pageId) throw new Error("Stage ID manquant.");
+
+  const normalizedDbId = normalizeDbId(dbId);
+  if (!normalizedDbId) {
+    throw new Error("Invalid database ID. Please paste the database URL or ID in Options.");
+  }
+
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  const properties = {};
+  const fieldDefs = [
+    { payloadKey: "title", notionKey: map.jobTitle || "Job Title", builder: buildStageTextProperty },
+    { payloadKey: "company", notionKey: map.company || "Entreprise", builder: buildStageTextProperty },
+    { payloadKey: "location", notionKey: map.location || "Lieu", builder: buildStageTextProperty },
+    { payloadKey: "url", notionKey: map.url || "lien offre", builder: buildStageTextProperty },
+    { payloadKey: "status", notionKey: map.status || "Status", builder: buildStageTextProperty },
+    { payloadKey: "role", notionKey: map.role || "Role", builder: buildStageRoleProperty },
+    { payloadKey: "type", notionKey: map.type || "Type d'infrastructure", builder: buildStageTextProperty },
+    {
+      payloadKey: "applicationDate",
+      notionKey: map.applicationDate || "Application Date",
+      builder: buildStageTextProperty,
+    },
+    { payloadKey: "startMonth", notionKey: map.startMonth || "Start month", builder: buildStageTextProperty },
+    { payloadKey: "openDate", notionKey: map.openDate || "Date d'ouverture", builder: buildStageTextProperty },
+    { payloadKey: "closeDate", notionKey: map.closeDate || "Date de fermeture", builder: buildStageTextProperty },
+    { payloadKey: "notes", notionKey: map.notes || "Notes", builder: buildStageTextProperty },
+  ];
+
+  fieldDefs.forEach(({ payloadKey, notionKey, builder }) => {
+    if (!Object.prototype.hasOwnProperty.call(payload || {}, payloadKey)) return;
+    const prop = db.properties?.[notionKey];
+    if (!prop) return;
+    const patch = builder(prop, payload?.[payloadKey]);
+    if (patch) {
+      properties[notionKey] = patch;
+    }
+  });
+
+  if (!Object.keys(properties).length) {
+    throw new Error("Aucune mise a jour applicable.");
+  }
+
+  await notionFetch(token, `pages/${pageId}`, "PATCH", { properties });
+  await invalidateStageSnapshot();
+  scheduleStageSnapshotRefresh(150);
+  const refreshed = await getStageById(pageId);
+  return { ok: true, item: refreshed?.item || { id: pageId } };
+}
+
+async function getStageStatusOptions() {
+  const config = await getStageConfig();
+  const schemaInfo = await getStageSchemaCached(config, { force: false });
+  const statusKey = config.map.status || "Status";
+  const statusProp = schemaInfo?.schema?.properties?.[statusKey];
+  const options = statusPropOptions(statusProp)
+    .map((opt) => normalizeText(opt?.name || ""))
+    .filter(Boolean);
+  return {
+    ok: true,
+    options,
+    cached: !!schemaInfo?.cached,
+    propertyType: normalizeText(statusProp?.type || ""),
+  };
+}
+
 async function updateStageStatus(payload) {
   const { notionToken: token, notionDbId: dbId } = await chrome.storage.sync.get([
     "notionToken",
@@ -5548,6 +5661,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
   }
 
+  if (msg?.type === "GET_STAGE_STATUS_OPTIONS") {
+    return respondWith(
+      getStageStatusOptions(),
+      sendResponse,
+      "Notion - stage status options",
+      {
+        syncName: "notionStageSchema",
+      }
+    );
+  }
+
   if (msg?.type === "UPDATE_STAGE_NOTES") {
     return respondWith(
       updateStageNotes(msg?.payload),
@@ -5555,6 +5679,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       "Notion - stage notes",
       {
         syncName: "notionStageNotes",
+        meta: { id: msg?.payload?.id || null },
+      }
+    );
+  }
+
+  if (msg?.type === "UPDATE_STAGE_FIELDS") {
+    return respondWith(
+      updateStageFields(msg?.payload),
+      sendResponse,
+      "Notion - stage edition",
+      {
+        syncName: "notionStageEdit",
         meta: { id: msg?.payload?.id || null },
       }
     );
