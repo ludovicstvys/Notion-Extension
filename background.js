@@ -77,6 +77,7 @@ const URL_BLOCKER_ENABLED_KEY = "urlBlockerEnabled";
 const URL_BLOCKER_LOGS_KEY = "urlBlockerLogs";
 const URL_BLOCKER_BASE_ID = 9000;
 const URL_BLOCKER_LOG_LIMIT = 80;
+const FOCUS_MODE_ENABLED_KEY = "focusModeEnabled";
 const FOCUS_API_BASE = "http://127.0.0.1:49172";
 const FOCUS_STATE_KEY = "focusBridgeState";
 const FOCUS_POLL_MS = 1500;
@@ -891,7 +892,16 @@ function shouldBlockUrl(url, urlFilters) {
 }
 
 function isFocusBlockingActive(state) {
-  return !!state && state.isEnabled === true && state.isPaused === false && state.phase === "work";
+  return (
+    !!state &&
+    state.isEnabled === true &&
+    state.isPaused === false &&
+    state.phase === "work"
+  );
+}
+
+function shouldApplyFocusBlocking(state, focusModeEnabled = true) {
+  return focusModeEnabled !== false && isFocusBlockingActive(state);
 }
 
 function normalizeFocusState(state, source = "unknown") {
@@ -969,7 +979,10 @@ async function fetchFocusState() {
 }
 
 async function syncFocusBlockingRules(state) {
-  const filters = getFocusUrlFilters(state);
+  const { [FOCUS_MODE_ENABLED_KEY]: focusModeEnabled = true } = await chrome.storage.local.get([
+    FOCUS_MODE_ENABLED_KEY,
+  ]);
+  const filters = shouldApplyFocusBlocking(state, focusModeEnabled) ? getFocusUrlFilters(state) : [];
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
   const removeRuleIds = existing
     .filter((r) => r.id >= FOCUS_DNR_BASE_ID && r.id < FOCUS_DNR_BASE_ID + FOCUS_DNR_RANGE)
@@ -1020,8 +1033,17 @@ function bootstrapFocusBridge() {
 }
 
 async function applyUrlBlockerRules() {
-  const { [URL_BLOCKER_ENABLED_KEY]: enabled = true, [URL_BLOCKER_RULES_KEY]: rawRules = [] } =
-    await chrome.storage.local.get([URL_BLOCKER_ENABLED_KEY, URL_BLOCKER_RULES_KEY]);
+  const {
+    [URL_BLOCKER_ENABLED_KEY]: enabled = true,
+    [URL_BLOCKER_RULES_KEY]: rawRules = [],
+    [FOCUS_MODE_ENABLED_KEY]: focusModeEnabled = true,
+    [FOCUS_STATE_KEY]: focusState = null,
+  } = await chrome.storage.local.get([
+    URL_BLOCKER_ENABLED_KEY,
+    URL_BLOCKER_RULES_KEY,
+    FOCUS_MODE_ENABLED_KEY,
+    FOCUS_STATE_KEY,
+  ]);
 
   const normalized = normalizeUrlBlockerRules(rawRules);
 
@@ -1030,7 +1052,7 @@ async function applyUrlBlockerRules() {
     .filter((r) => r.id >= URL_BLOCKER_BASE_ID && r.id < URL_BLOCKER_BASE_ID + 10000)
     .map((r) => r.id);
 
-  if (!enabled) {
+  if (!enabled || !shouldApplyFocusBlocking(focusState, focusModeEnabled)) {
     await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules: [] });
     return;
   }
@@ -1074,9 +1096,16 @@ async function checkAllTabsForBlocker() {
     [URL_BLOCKER_RULES_KEY]: rawRules = [],
     [URL_BLOCKER_ENABLED_KEY]: enabled = true,
     [FOCUS_STATE_KEY]: focusState = null,
-  } = await chrome.storage.local.get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY, FOCUS_STATE_KEY]);
-  const localFilters = enabled ? normalizeUrlBlockerRules(rawRules) : [];
-  const focusFilters = getFocusUrlFilters(focusState);
+    [FOCUS_MODE_ENABLED_KEY]: focusModeEnabled = true,
+  } = await chrome.storage.local.get([
+    URL_BLOCKER_RULES_KEY,
+    URL_BLOCKER_ENABLED_KEY,
+    FOCUS_STATE_KEY,
+    FOCUS_MODE_ENABLED_KEY,
+  ]);
+  const focusBlockingActive = shouldApplyFocusBlocking(focusState, focusModeEnabled);
+  const localFilters = enabled && focusBlockingActive ? normalizeUrlBlockerRules(rawRules) : [];
+  const focusFilters = focusBlockingActive ? getFocusUrlFilters(focusState) : [];
   const filters = [...localFilters, ...focusFilters];
   if (!filters.length) return;
 
@@ -6141,7 +6170,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       (async () => {
         const res = await fetch(`${FOCUS_API_BASE}${endpoint}`, { method: "POST" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const focusEnabled = msg.type !== "FOCUS_STOP";
+        await chrome.storage.local.set({
+          [FOCUS_MODE_ENABLED_KEY]: focusEnabled,
+          [URL_BLOCKER_ENABLED_KEY]: focusEnabled,
+        });
         const result = await refreshFocusBridge();
+        await applyUrlBlockerRules();
         return { ok: true, ...result };
       })(),
       sendResponse,
@@ -7026,11 +7061,19 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes[URL_BLOCKER_RULES_KEY] || changes[URL_BLOCKER_ENABLED_KEY]) {
+  if (
+    changes[URL_BLOCKER_RULES_KEY] ||
+    changes[URL_BLOCKER_ENABLED_KEY] ||
+    changes[FOCUS_MODE_ENABLED_KEY] ||
+    changes[FOCUS_STATE_KEY]
+  ) {
     applyUrlBlockerRules().then(checkAllTabsForBlocker);
   }
-  if (changes[FOCUS_STATE_KEY]) {
-    syncFocusBlockingRules(changes[FOCUS_STATE_KEY].newValue || null).catch(() => {});
+  if (changes[FOCUS_STATE_KEY] || changes[FOCUS_MODE_ENABLED_KEY]) {
+    readFocusState()
+      .then((state) => syncFocusBlockingRules(state))
+      .then(checkAllTabsForBlocker)
+      .catch(() => {});
   }
 });
 
@@ -7039,13 +7082,21 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!candidateUrl) return;
   if (changeInfo.url) {
     chrome.storage.local
-      .get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY, FOCUS_STATE_KEY])
+      .get([
+        URL_BLOCKER_RULES_KEY,
+        URL_BLOCKER_ENABLED_KEY,
+        FOCUS_STATE_KEY,
+        FOCUS_MODE_ENABLED_KEY,
+      ])
       .then((data) => {
         const localFilters =
-          data[URL_BLOCKER_ENABLED_KEY] === false
+          data[URL_BLOCKER_ENABLED_KEY] === false ||
+          !shouldApplyFocusBlocking(data[FOCUS_STATE_KEY], data[FOCUS_MODE_ENABLED_KEY])
             ? []
             : normalizeUrlBlockerRules(data[URL_BLOCKER_RULES_KEY] || []);
-        const focusFilters = getFocusUrlFilters(data[FOCUS_STATE_KEY]);
+        const focusFilters = shouldApplyFocusBlocking(data[FOCUS_STATE_KEY], data[FOCUS_MODE_ENABLED_KEY])
+          ? getFocusUrlFilters(data[FOCUS_STATE_KEY])
+          : [];
         const filters = [...localFilters, ...focusFilters];
         if (!filters.length) return;
         if (shouldBlockUrl(candidateUrl, filters)) {
