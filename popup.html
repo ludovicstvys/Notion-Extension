@@ -59,6 +59,34 @@
         padding: 10px;
         margin-bottom: 10px;
       }
+      .focus-status {
+        display: grid;
+        gap: 4px;
+        margin-top: 8px;
+      }
+      .focus-phase {
+        font-size: 18px;
+        font-weight: 700;
+      }
+      .focus-meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .progress {
+        width: 100%;
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.18);
+        overflow: hidden;
+      }
+      .progress > span {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, rgba(56, 189, 248, 0.95), rgba(34, 197, 94, 0.95));
+        width: 0%;
+        transition: width 0.2s ease;
+      }
       .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
       .row.single { grid-template-columns: 1fr; }
       button {
@@ -210,8 +238,27 @@
     <div class="shell">
       <header>
         <h3 class="title">Stage - Notion</h3>
-        <span class="badge">Sync rapide</span>
+        <span class="badge" id="focus-connection">Sync rapide</span>
       </header>
+
+      <section class="card">
+        <strong>Pomodoro</strong>
+        <div class="focus-status">
+          <div class="focus-phase" id="focus-phase">App not running</div>
+          <div class="focus-meta" id="focus-summary">Connexion locale en attente.</div>
+          <div class="focus-meta" id="focus-remaining">--:--</div>
+          <div class="progress" aria-hidden="true"><span id="focus-progress"></span></div>
+        </div>
+        <div class="row" style="margin-top: 10px;">
+          <button id="focus-start">Start</button>
+          <button id="focus-stop" class="secondary">Stop</button>
+        </div>
+        <div class="row" style="margin-top: 8px;">
+          <button id="focus-toggle" class="secondary">Pause / Resume</button>
+          <button id="focus-refresh" class="secondary">Refresh</button>
+        </div>
+        <p class="hint" id="focus-bridge-hint">localhost only</p>
+      </section>
 
       <section class="card">
         <strong>Ajouter a Notion</strong>

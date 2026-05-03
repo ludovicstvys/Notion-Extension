@@ -1,2 +1,52 @@
-.tools/
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local tooling
+.tools/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+config.local.js
+config.*.local.js
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+coverage/
+
+# Packaged browser extensions
+*.crx
+*.xpi
+*.zip
+web-ext-artifacts/
+
+# Safari Web Extension / Xcode output
+DerivedData/
+*.xcarchive
+*.xcuserstate
+xcuserdata/

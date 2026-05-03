@@ -77,12 +77,21 @@ const URL_BLOCKER_ENABLED_KEY = "urlBlockerEnabled";
 const URL_BLOCKER_LOGS_KEY = "urlBlockerLogs";
 const URL_BLOCKER_BASE_ID = 9000;
 const URL_BLOCKER_LOG_LIMIT = 80;
+const FOCUS_API_BASE = "http://127.0.0.1:49172";
+const FOCUS_STATE_KEY = "focusBridgeState";
+const FOCUS_POLL_MS = 1500;
+const FOCUS_SYNC_ALARM = "focus-sync";
+const FOCUS_FETCH_TIMEOUT_MS = 900;
+const FOCUS_DNR_BASE_ID = 250000;
+const FOCUS_DNR_RANGE = 20000;
 const ALARM_STORAGE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 
 let stageSnapshotInFlight = null;
 let stageSnapshotRefreshTimer = null;
 let notionQueueWorkerInFlight = null;
 let urlBlockerLogChain = Promise.resolve();
+let focusPollTimer = null;
+let focusPollInFlight = null;
 
 try {
   if (chrome?.sidePanel?.setPanelBehavior) {
@@ -726,6 +735,47 @@ function normalizeUrlBlockerRules(rawRules) {
   return normalized;
 }
 
+function stableFocusRuleId(rule) {
+  const text = normalizeText(rule).toLowerCase();
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return FOCUS_DNR_BASE_ID + (hash % FOCUS_DNR_RANGE);
+}
+
+function normalizeBlockedRuleToUrlFilter(rule) {
+  const text = normalizeText(rule).toLowerCase();
+  if (!text) return "";
+  if (text.startsWith("||")) return text;
+  if (text.startsWith("http://") || text.startsWith("https://")) {
+    try {
+      const u = new URL(text);
+      return `||${u.hostname}^`;
+    } catch (_) {
+      return "";
+    }
+  }
+  const host = text.replace(/^\/+|\/+$/g, "");
+  return host ? `||${host}^` : "";
+}
+
+function normalizeBlockedRules(rawRules) {
+  const normalized = [];
+  const seen = new Set();
+  for (const rule of rawRules || []) {
+    const filter = normalizeBlockedRuleToUrlFilter(rule);
+    if (!filter || seen.has(filter)) continue;
+    seen.add(filter);
+    normalized.push(filter);
+  }
+  return normalized;
+}
+
+function getFocusUrlFilters(state) {
+  return isFocusBlockingActive(state) ? normalizeBlockedRules(state.blockedRules) : [];
+}
+
 function normalizeRawUrlBlockerRules(rawRules) {
   const cleaned = [];
   const seen = new Set();
@@ -840,6 +890,135 @@ function shouldBlockUrl(url, urlFilters) {
   return false;
 }
 
+function isFocusBlockingActive(state) {
+  return !!state && state.isEnabled === true && state.isPaused === false && state.phase === "work";
+}
+
+function normalizeFocusState(state, source = "unknown") {
+  const remainingSeconds = Number.parseInt(state?.remainingSeconds, 10);
+  const totalSeconds = Number.parseInt(state?.totalSeconds, 10);
+  const progress = Number.parseFloat(state?.progress);
+  return {
+    isConnected: source === "local",
+    isEnabled: !!state?.isEnabled,
+    isPaused: !!state?.isPaused,
+    phase: state?.phase === "work" || state?.phase === "shortBreak" ? state.phase : "idle",
+    summary: normalizeText(state?.summary || ""),
+    remainingSeconds: Number.isFinite(remainingSeconds) ? Math.max(0, remainingSeconds) : 0,
+    totalSeconds: Number.isFinite(totalSeconds) ? Math.max(0, totalSeconds) : 0,
+    progress: Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0,
+    blockedRules: normalizeRawUrlBlockerRules(Array.isArray(state?.blockedRules) ? state.blockedRules : []),
+    serverPort: Number.parseInt(state?.serverPort, 10) || 49172,
+    updatedAt: Date.now(),
+    source,
+  };
+}
+
+async function readFocusState() {
+  const data = await chrome.storage.local.get([FOCUS_STATE_KEY]);
+  return normalizeFocusState(
+    data?.[FOCUS_STATE_KEY] || {
+      isEnabled: false,
+      isPaused: false,
+      phase: "idle",
+      summary: "",
+      remainingSeconds: 0,
+      totalSeconds: 0,
+      progress: 0,
+      blockedRules: [],
+    },
+    "cached"
+  );
+}
+
+async function persistFocusState(state, source = "local") {
+  const normalized = normalizeFocusState(state, source);
+  await chrome.storage.local.set({ [FOCUS_STATE_KEY]: normalized });
+  return normalized;
+}
+
+async function fetchFocusState() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FOCUS_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${FOCUS_API_BASE}/focus/state`, {
+      method: "GET",
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const normalized = await persistFocusState(json);
+    return { ok: true, state: normalized };
+  } catch (err) {
+    const offlineState = await persistFocusState({
+      isEnabled: false,
+      isPaused: false,
+      phase: "idle",
+      summary: "",
+      remainingSeconds: 0,
+      totalSeconds: 0,
+      progress: 0,
+      blockedRules: [],
+      serverPort: 49172,
+    }, "offline");
+    return { ok: false, error: err?.message || "focus-unreachable", state: offlineState };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function syncFocusBlockingRules(state) {
+  const filters = getFocusUrlFilters(state);
+  const existing = await chrome.declarativeNetRequest.getDynamicRules();
+  const removeRuleIds = existing
+    .filter((r) => r.id >= FOCUS_DNR_BASE_ID && r.id < FOCUS_DNR_BASE_ID + FOCUS_DNR_RANGE)
+    .map((r) => r.id);
+  const addRules = filters.map((urlFilter, index) => ({
+    id: stableFocusRuleId(`${urlFilter}|${index}`),
+    priority: 1,
+    action: { type: "block" },
+    condition: { urlFilter, resourceTypes: ["main_frame", "sub_frame"] },
+  }));
+  await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules });
+  return { addRules: addRules.length, removeRuleIds: removeRuleIds.length, filters };
+}
+
+async function refreshFocusBridge() {
+  if (focusPollInFlight) return focusPollInFlight;
+  focusPollInFlight = (async () => {
+    const result = await fetchFocusState();
+    try {
+      const dnr = await syncFocusBlockingRules(result.state);
+      await checkAllTabsForBlocker();
+      result.dnr = dnr;
+    } catch (err) {
+      result.dnrError = err?.message || "DNR update failed";
+    }
+    return result;
+  })().finally(() => {
+    focusPollInFlight = null;
+  });
+  return focusPollInFlight;
+}
+
+function ensureFocusPolling() {
+  if (focusPollTimer) return;
+  focusPollTimer = setInterval(() => {
+    refreshFocusBridge().catch(() => {});
+  }, FOCUS_POLL_MS);
+}
+
+function ensureFocusAlarm() {
+  chrome.alarms.create(FOCUS_SYNC_ALARM, { periodInMinutes: 0.5 });
+}
+
+function bootstrapFocusBridge() {
+  ensureFocusAlarm();
+  ensureFocusPolling();
+  refreshFocusBridge().catch(() => {});
+}
+
 async function applyUrlBlockerRules() {
   const { [URL_BLOCKER_ENABLED_KEY]: enabled = true, [URL_BLOCKER_RULES_KEY]: rawRules = [] } =
     await chrome.storage.local.get([URL_BLOCKER_ENABLED_KEY, URL_BLOCKER_RULES_KEY]);
@@ -891,10 +1070,14 @@ async function checkAllTabsForBlocker() {
     return;
   }
 
-  const { [URL_BLOCKER_RULES_KEY]: rawRules = [], [URL_BLOCKER_ENABLED_KEY]: enabled = true } =
-    await chrome.storage.local.get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY]);
-  if (!enabled) return;
-  const filters = normalizeUrlBlockerRules(rawRules);
+  const {
+    [URL_BLOCKER_RULES_KEY]: rawRules = [],
+    [URL_BLOCKER_ENABLED_KEY]: enabled = true,
+    [FOCUS_STATE_KEY]: focusState = null,
+  } = await chrome.storage.local.get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY, FOCUS_STATE_KEY]);
+  const localFilters = enabled ? normalizeUrlBlockerRules(rawRules) : [];
+  const focusFilters = getFocusUrlFilters(focusState);
+  const filters = [...localFilters, ...focusFilters];
   if (!filters.length) return;
 
   for (const tab of tabs) {
@@ -5925,6 +6108,47 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     );
   }
 
+  if (msg?.type === "FOCUS_GET_STATE") {
+    return respondWith(
+      readFocusState().then((state) => ({ ok: true, state })),
+      sendResponse,
+      "Focus - get state"
+    );
+  }
+
+  if (msg?.type === "FOCUS_REFRESH") {
+    return respondWith(refreshFocusBridge().then((result) => ({ ok: true, ...result })), sendResponse, "Focus - refresh");
+  }
+
+  if (
+    msg?.type === "FOCUS_START" ||
+    msg?.type === "FOCUS_PAUSE" ||
+    msg?.type === "FOCUS_RESUME" ||
+    msg?.type === "FOCUS_TOGGLE_PAUSE" ||
+    msg?.type === "FOCUS_STOP"
+  ) {
+    const endpoint =
+      msg.type === "FOCUS_START"
+        ? "/focus/start"
+        : msg.type === "FOCUS_PAUSE"
+          ? "/focus/pause"
+          : msg.type === "FOCUS_RESUME"
+            ? "/focus/resume"
+            : msg.type === "FOCUS_TOGGLE_PAUSE"
+              ? "/focus/toggle-pause"
+              : "/focus/stop";
+    return respondWith(
+      (async () => {
+        const res = await fetch(`${FOCUS_API_BASE}${endpoint}`, { method: "POST" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const result = await refreshFocusBridge();
+        return { ok: true, ...result };
+      })(),
+      sendResponse,
+      `Focus - ${msg.type}`
+    );
+  }
+
   if (msg?.type === "GCAL_LIST_CALENDARS") {
     return respondWith(
       listCalendars(false).then((items) => ({ ok: true, items })),
@@ -6487,6 +6711,14 @@ async function scheduleCustomGcalSnooze(payload) {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!alarm?.name) return;
+  if (alarm.name === FOCUS_SYNC_ALARM) {
+    try {
+      await refreshFocusBridge();
+    } catch (_) {
+      // ignore
+    }
+    return;
+  }
   if (alarm.name === STAGE_SLA_ALARM) {
     notifySlaBlockers().catch(() => {});
     return;
@@ -6700,6 +6932,7 @@ chrome.runtime.onInstalled.addListener(() => {
   flushOfflineQueue().catch(() => {});
   scheduleStageSnapshotRefresh(3000);
   ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
+  bootstrapFocusBridge();
 });
 
 chrome.notifications.onClicked.addListener((notificationId) => {
@@ -6788,12 +7021,16 @@ chrome.runtime.onStartup.addListener(() => {
   flushOfflineQueue().catch(() => {});
   scheduleStageSnapshotRefresh(3000);
   ensureUrlBlockerDefaults().then(() => applyUrlBlockerRules()).then(checkAllTabsForBlocker);
+  bootstrapFocusBridge();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes[URL_BLOCKER_RULES_KEY] || changes[URL_BLOCKER_ENABLED_KEY]) {
     applyUrlBlockerRules().then(checkAllTabsForBlocker);
+  }
+  if (changes[FOCUS_STATE_KEY]) {
+    syncFocusBlockingRules(changes[FOCUS_STATE_KEY].newValue || null).catch(() => {});
   }
 });
 
@@ -6802,10 +7039,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!candidateUrl) return;
   if (changeInfo.url) {
     chrome.storage.local
-      .get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY])
+      .get([URL_BLOCKER_RULES_KEY, URL_BLOCKER_ENABLED_KEY, FOCUS_STATE_KEY])
       .then((data) => {
-        if (data[URL_BLOCKER_ENABLED_KEY] === false) return;
-        const filters = normalizeUrlBlockerRules(data[URL_BLOCKER_RULES_KEY] || []);
+        const localFilters =
+          data[URL_BLOCKER_ENABLED_KEY] === false
+            ? []
+            : normalizeUrlBlockerRules(data[URL_BLOCKER_RULES_KEY] || []);
+        const focusFilters = getFocusUrlFilters(data[FOCUS_STATE_KEY]);
+        const filters = [...localFilters, ...focusFilters];
         if (!filters.length) return;
         if (shouldBlockUrl(candidateUrl, filters)) {
           queueUrlBlockerLog({
@@ -6822,3 +7063,5 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
   // Pipeline auto-import removed.
 });
+
+bootstrapFocusBridge();

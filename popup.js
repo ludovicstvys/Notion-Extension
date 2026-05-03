@@ -10,9 +10,97 @@ const todoStagesStatusEl = document.getElementById("todo-stages-status");
 const todoStagesCountEl = document.getElementById("todo-stages-count");
 const offlineStatusEl = document.getElementById("offline-status");
 const toastStackEl = document.getElementById("toast-stack");
+const focusPhaseEl = document.getElementById("focus-phase");
+const focusSummaryEl = document.getElementById("focus-summary");
+const focusRemainingEl = document.getElementById("focus-remaining");
+const focusProgressEl = document.getElementById("focus-progress");
+const focusConnectionEl = document.getElementById("focus-connection");
+const focusStartBtn = document.getElementById("focus-start");
+const focusStopBtn = document.getElementById("focus-stop");
+const focusToggleBtn = document.getElementById("focus-toggle");
+const focusRefreshBtn = document.getElementById("focus-refresh");
 const navButtons = Array.from(document.querySelectorAll(".nav-btn"));
 
 let extracted = null;
+let focusPollTimer = null;
+let currentFocusState = null;
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (res) => {
+      const err = chrome.runtime.lastError;
+      if (err) resolve({ ok: false, error: err.message });
+      else resolve(res || { ok: false, error: "empty response" });
+    });
+  });
+}
+
+function formatDuration(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds || 0));
+  const m = String(Math.floor(s / 60)).padStart(2, "0");
+  const r = String(s % 60).padStart(2, "0");
+  return `${m}:${r}`;
+}
+
+function phaseLabel(state) {
+  if (!state?.isConnected) return "App not running";
+  if (state.isEnabled && state.phase === "work" && !state.isPaused) return "Focus active";
+  if (state.isEnabled && state.isPaused) return "Paused";
+  if (state.isEnabled && state.phase === "shortBreak") return "Break";
+  return "Focus off";
+}
+
+function renderFocusState(state, dnrError = "") {
+  currentFocusState = state || null;
+  if (focusPhaseEl) focusPhaseEl.textContent = phaseLabel(state);
+  if (focusSummaryEl) {
+    focusSummaryEl.textContent =
+      dnrError ||
+      state?.summary ||
+      (state?.isConnected ? "Connexion locale établie." : "Connexion locale en attente.");
+  }
+  if (focusRemainingEl) {
+    focusRemainingEl.textContent = state?.isConnected
+      ? `Temps restant: ${formatDuration(state.remainingSeconds)} / ${formatDuration(state.totalSeconds)}`
+      : "--:--";
+  }
+  if (focusProgressEl) {
+    focusProgressEl.style.width = `${Math.max(0, Math.min(100, Math.round((state?.progress || 0) * 100)))}%`;
+  }
+  if (focusConnectionEl) {
+    focusConnectionEl.textContent = state?.isConnected ? "Connected" : "Offline";
+  }
+  if (focusToggleBtn) {
+    focusToggleBtn.textContent = state?.isPaused ? "Resume" : "Pause";
+  }
+  if (focusStartBtn) focusStartBtn.disabled = !!(state?.isConnected && state?.isEnabled && state.phase === "work" && !state.isPaused);
+  if (focusStopBtn) focusStopBtn.disabled = !state?.isConnected;
+}
+
+async function refreshFocusState() {
+  const res = await sendRuntimeMessage({ type: "FOCUS_REFRESH" });
+  if (!res?.ok || !res?.state) {
+    renderFocusState({
+      isConnected: false,
+      isEnabled: false,
+      isPaused: false,
+      phase: "idle",
+      summary: "App not running",
+      remainingSeconds: 0,
+      totalSeconds: 0,
+      progress: 0,
+    });
+    return;
+  }
+  renderFocusState(res.state, res.dnrError || "");
+}
+
+function startFocusPolling() {
+  if (focusPollTimer) return;
+  focusPollTimer = setInterval(() => {
+    refreshFocusState().catch(() => {});
+  }, 1500);
+}
 
 function normalizeText(input) {
   const text = (input ?? "").toString();
@@ -52,6 +140,11 @@ function handleNotionQueueEvent(msg) {
 
 chrome.runtime.onMessage.addListener((msg) => {
   handleNotionQueueEvent(msg);
+});
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type !== "FOCUS_STATE_UPDATED") return;
+  renderFocusState(msg.state || null);
 });
 
 function formatPreview(data) {
@@ -409,3 +502,33 @@ navButtons.forEach((btn) => {
     await chrome.tabs.create({ url: chrome.runtime.getURL(href) });
   });
 });
+
+if (focusStartBtn) {
+  focusStartBtn.addEventListener("click", async () => {
+    await sendRuntimeMessage({ type: "FOCUS_START" });
+    await refreshFocusState();
+  });
+}
+
+if (focusStopBtn) {
+  focusStopBtn.addEventListener("click", async () => {
+    await sendRuntimeMessage({ type: "FOCUS_STOP" });
+    await refreshFocusState();
+  });
+}
+
+if (focusToggleBtn) {
+  focusToggleBtn.addEventListener("click", async () => {
+    await sendRuntimeMessage({ type: "FOCUS_TOGGLE_PAUSE" });
+    await refreshFocusState();
+  });
+}
+
+if (focusRefreshBtn) {
+  focusRefreshBtn.addEventListener("click", async () => {
+    await refreshFocusState();
+  });
+}
+
+refreshFocusState().catch(() => {});
+startFocusPolling();

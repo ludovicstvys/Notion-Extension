@@ -243,6 +243,7 @@ function resetPomodoro() {
 
 function setFocusButtons(state) {
   if (!pomodoroStartBtn || !pomodoroPauseBtn || !pomodoroResumeBtn || !pomodoroResetBtn) return;
+  pomodoroResetBtn.textContent = "Stop";
   if (state === "running") {
     pomodoroStartBtn.classList.add("hidden");
     pomodoroPauseBtn.classList.remove("hidden");
@@ -257,10 +258,89 @@ function setFocusButtons(state) {
     pomodoroResetBtn.classList.remove("hidden");
     return;
   }
+  if (state === "break") {
+    pomodoroStartBtn.classList.add("hidden");
+    pomodoroPauseBtn.classList.add("hidden");
+    pomodoroResumeBtn.classList.add("hidden");
+    pomodoroResetBtn.classList.remove("hidden");
+    return;
+  }
   pomodoroStartBtn.classList.remove("hidden");
   pomodoroPauseBtn.classList.add("hidden");
   pomodoroResumeBtn.classList.add("hidden");
   pomodoroResetBtn.classList.add("hidden");
+}
+
+function sendFocusBridgeMessage(type) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type }, (res) => {
+      const err = chrome.runtime.lastError;
+      if (err) resolve({ ok: false, error: err.message });
+      else resolve(res || { ok: false, error: "empty response" });
+    });
+  });
+}
+
+function renderFocusBridgeState(state, dnr, dnrError = "") {
+  pausePomodoro();
+  pomodoroRemaining = Number.parseInt(state?.remainingSeconds || "0", 10) || 0;
+  updatePomodoroDisplay();
+
+  focusRules = Array.isArray(state?.blockedRules) ? state.blockedRules : [];
+  renderFocusRules();
+
+  if (focusRuleInputEl) {
+    focusRuleInputEl.disabled = true;
+    focusRuleInputEl.placeholder = "Règles synchronisées depuis NotionDashboard";
+  }
+  if (focusRuleAddBtn) {
+    focusRuleAddBtn.disabled = true;
+  }
+
+  if (!state?.isConnected) {
+    setFocusButtons("idle");
+    if (focusRuleStatusEl) focusRuleStatusEl.textContent = "App not running";
+    return;
+  }
+
+  if (dnrError) {
+    if (focusRuleStatusEl) focusRuleStatusEl.textContent = `Erreur DNR: ${dnrError}`;
+    return;
+  }
+
+  if (state.isEnabled && state.isPaused) {
+    setFocusButtons("paused");
+    if (focusRuleStatusEl) focusRuleStatusEl.textContent = `Paused - ${focusRules.length} règle(s)`;
+    return;
+  }
+
+  if (state.isEnabled && state.phase === "work") {
+    setFocusButtons("running");
+    const count = Number.isFinite(dnr?.addRules) ? dnr.addRules : focusRules.length;
+    if (focusRuleStatusEl) focusRuleStatusEl.textContent = `Focus active - ${count} règle(s) DNR`;
+    return;
+  }
+
+  if (state.isEnabled && state.phase === "shortBreak") {
+    setFocusButtons("break");
+    if (focusRuleStatusEl) focusRuleStatusEl.textContent = "Break";
+    return;
+  }
+
+  setFocusButtons("idle");
+  if (focusRuleStatusEl) focusRuleStatusEl.textContent = "Focus off";
+}
+
+async function refreshFocusBridgeState() {
+  const res = await sendFocusBridgeMessage("FOCUS_REFRESH");
+  if (!res?.ok || !res?.state) {
+    renderFocusBridgeState({ isConnected: false, remainingSeconds: 0, blockedRules: [] });
+    if (focusRuleStatusEl) {
+      focusRuleStatusEl.textContent = `App not running${res?.error ? ` - ${res.error}` : ""}`;
+    }
+    return;
+  }
+  renderFocusBridgeState(res.state, res.dnr, res.dnrError || "");
 }
 
 function formatFocusLogTime(ts) {
@@ -1064,38 +1144,37 @@ chrome.storage.local.get(["pomodoroWork", "pomodoroBreak"], (data) => {
   pomodoroBreakMinutes = Number.parseInt(data.pomodoroBreak || "5", 10);
   resetPomodoro();
   setFocusButtons("idle");
+  refreshFocusBridgeState().catch(() => {});
+  setInterval(() => {
+    refreshFocusBridgeState().catch(() => {});
+  }, 1500);
 });
 
 if (pomodoroStartBtn) {
   pomodoroStartBtn.addEventListener("click", async () => {
-    await chrome.storage.local.set({ focusModeEnabled: true, urlBlockerEnabled: true });
-    chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
-    startPomodoro();
-    setFocusButtons("running");
+    await sendFocusBridgeMessage("FOCUS_START");
+    await refreshFocusBridgeState();
   });
 }
 
 if (pomodoroPauseBtn) {
-  pomodoroPauseBtn.addEventListener("click", () => {
-    pausePomodoro();
-    setFocusButtons("paused");
+  pomodoroPauseBtn.addEventListener("click", async () => {
+    await sendFocusBridgeMessage("FOCUS_PAUSE");
+    await refreshFocusBridgeState();
   });
 }
 
 if (pomodoroResumeBtn) {
-  pomodoroResumeBtn.addEventListener("click", () => {
-    startPomodoro();
-    setFocusButtons("running");
+  pomodoroResumeBtn.addEventListener("click", async () => {
+    await sendFocusBridgeMessage("FOCUS_RESUME");
+    await refreshFocusBridgeState();
   });
 }
 
 if (pomodoroResetBtn) {
   pomodoroResetBtn.addEventListener("click", async () => {
-    pausePomodoro();
-    resetPomodoro();
-    await chrome.storage.local.set({ focusModeEnabled: false, urlBlockerEnabled: false });
-    chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
-    setFocusButtons("idle");
+    await sendFocusBridgeMessage("FOCUS_STOP");
+    await refreshFocusBridgeState();
   });
 }
 
@@ -1145,6 +1224,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.urlBlockerLogs) {
     renderFocusLogs(changes.urlBlockerLogs.newValue || []);
   }
+  if (changes.focusBridgeState) {
+    renderFocusBridgeState(changes.focusBridgeState.newValue || null);
+  }
 });
 
 if (todoAddBtn) {
@@ -1179,7 +1261,7 @@ if (todoToggleBtn && todoFormEl) {
 }
 
 applyWidgetPreferences();
-loadFocusRules();
+refreshFocusBridgeState().catch(() => {});
 loadFocusLogs();
 loadEvents();
 loadNews();
