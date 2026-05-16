@@ -63,6 +63,8 @@ self.EXTENSION_DEFAULTS = {
     deadlinePrefs: { enabled: true, offsets: [24, 72, 168] },
 
     // URL blocker
+    alwaysUrlBlockerRules: [],
+    alwaysUrlBlockerEnabled: true,
     urlBlockerRules: [],
     urlBlockerEnabled: true,
     urlBlockerLogs: [],

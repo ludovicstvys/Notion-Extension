@@ -28,6 +28,10 @@ const urlBlockerSaveBtn = document.getElementById("url-blocker-save");
 const urlBlockerClearLogsBtn = document.getElementById("url-blocker-clear-logs");
 const urlBlockerStatusEl = document.getElementById("url-blocker-status");
 const urlBlockerLogsEl = document.getElementById("url-blocker-logs");
+const focusUrlBlockerInputEl = document.getElementById("focus-url-blocker-input");
+const focusUrlBlockerListEl = document.getElementById("focus-url-blocker-list");
+const focusUrlBlockerSaveBtn = document.getElementById("focus-url-blocker-save");
+const focusUrlBlockerStatusEl = document.getElementById("focus-url-blocker-status");
 const widgetEventsEl = document.getElementById("widget-events");
 const widgetAddEl = document.getElementById("widget-add");
 const widgetFocusEl = document.getElementById("widget-focus");
@@ -113,11 +117,13 @@ chrome.storage.local.get(["googlePlacesApiKey"], (v) => {
       v.googlePlacesApiKey ?? LOCAL_DEFAULTS.googlePlacesApiKey ?? "";
   }
 });
-let urlBlockerRules = [];
-function renderUrlBlockerRules() {
-  if (!urlBlockerListEl) return;
-  urlBlockerListEl.innerHTML = "";
-  urlBlockerRules.forEach((rule) => {
+let alwaysUrlBlockerRules = [];
+let focusUrlBlockerRules = [];
+
+function renderRuleChips(listEl, rules, onDelete) {
+  if (!listEl) return;
+  listEl.innerHTML = "";
+  rules.forEach((rule) => {
     const chip = document.createElement("div");
     chip.className = "chip";
     chip.textContent = rule;
@@ -127,12 +133,25 @@ function renderUrlBlockerRules() {
     del.setAttribute("aria-label", `Supprimer ${rule}`);
     del.textContent = "×";
     del.addEventListener("click", () => {
-      urlBlockerRules = urlBlockerRules.filter((r) => r !== rule);
-      renderUrlBlockerRules();
+      onDelete(rule);
     });
 
     chip.appendChild(del);
-    urlBlockerListEl.appendChild(chip);
+    listEl.appendChild(chip);
+  });
+}
+
+function renderUrlBlockerRules() {
+  renderRuleChips(urlBlockerListEl, alwaysUrlBlockerRules, (rule) => {
+    alwaysUrlBlockerRules = alwaysUrlBlockerRules.filter((r) => r !== rule);
+    renderUrlBlockerRules();
+  });
+}
+
+function renderFocusUrlBlockerRules() {
+  renderRuleChips(focusUrlBlockerListEl, focusUrlBlockerRules, (rule) => {
+    focusUrlBlockerRules = focusUrlBlockerRules.filter((r) => r !== rule);
+    renderFocusUrlBlockerRules();
   });
 }
 
@@ -191,26 +210,40 @@ function loadUrlBlockerLogs() {
   });
 }
 
-chrome.storage.local.get(["urlBlockerRules"], (v) => {
-  if (Array.isArray(v.urlBlockerRules)) {
-    urlBlockerRules = v.urlBlockerRules;
-  } else if (Array.isArray(LOCAL_DEFAULTS.urlBlockerRules)) {
-    urlBlockerRules = LOCAL_DEFAULTS.urlBlockerRules;
+chrome.storage.local.get(["alwaysUrlBlockerRules", "urlBlockerRules"], (v) => {
+  if (Array.isArray(v.alwaysUrlBlockerRules)) {
+    alwaysUrlBlockerRules = v.alwaysUrlBlockerRules;
+  } else if (Array.isArray(LOCAL_DEFAULTS.alwaysUrlBlockerRules)) {
+    alwaysUrlBlockerRules = LOCAL_DEFAULTS.alwaysUrlBlockerRules;
   } else {
-    urlBlockerRules = [];
+    alwaysUrlBlockerRules = [];
+  }
+  if (Array.isArray(v.urlBlockerRules)) {
+    focusUrlBlockerRules = v.urlBlockerRules;
+  } else if (Array.isArray(LOCAL_DEFAULTS.urlBlockerRules)) {
+    focusUrlBlockerRules = LOCAL_DEFAULTS.urlBlockerRules;
+  } else {
+    focusUrlBlockerRules = [];
   }
   renderUrlBlockerRules();
+  renderFocusUrlBlockerRules();
 });
 
 loadUrlBlockerLogs();
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.urlBlockerRules) {
-    urlBlockerRules = Array.isArray(changes.urlBlockerRules.newValue)
-      ? changes.urlBlockerRules.newValue
+  if (changes.alwaysUrlBlockerRules) {
+    alwaysUrlBlockerRules = Array.isArray(changes.alwaysUrlBlockerRules.newValue)
+      ? changes.alwaysUrlBlockerRules.newValue
       : [];
     renderUrlBlockerRules();
+  }
+  if (changes.urlBlockerRules) {
+    focusUrlBlockerRules = Array.isArray(changes.urlBlockerRules.newValue)
+      ? changes.urlBlockerRules.newValue
+      : [];
+    renderFocusUrlBlockerRules();
   }
   if (changes.urlBlockerLogs) {
     renderUrlBlockerLogs(changes.urlBlockerLogs.newValue || []);
@@ -328,12 +361,41 @@ document.getElementById("save").addEventListener("click", async () => {
 
 if (urlBlockerSaveBtn) {
   urlBlockerSaveBtn.addEventListener("click", async () => {
-    const rules = Array.from(new Set(urlBlockerRules));
-    await chrome.storage.local.set({ urlBlockerRules: rules, urlBlockerEnabled: true });
+    const rules = Array.from(new Set(alwaysUrlBlockerRules));
+    await chrome.storage.local.set({ alwaysUrlBlockerRules: rules, alwaysUrlBlockerEnabled: true });
     if (urlBlockerStatusEl) {
       urlBlockerStatusEl.textContent = `Sauvegarde OK (${rules.length} règle(s)).`;
     }
     chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
+  });
+}
+
+if (focusUrlBlockerSaveBtn) {
+  focusUrlBlockerSaveBtn.addEventListener("click", async () => {
+    const rules = Array.from(new Set(focusUrlBlockerRules));
+    chrome.runtime.sendMessage(
+      {
+        type: "SET_URL_BLOCKER_STATE",
+        payload: { rawRules: rules },
+      },
+      (res) => {
+        if (chrome.runtime.lastError) {
+          if (focusUrlBlockerStatusEl) {
+            focusUrlBlockerStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
+          }
+          return;
+        }
+        if (!res?.ok) {
+          if (focusUrlBlockerStatusEl) {
+            focusUrlBlockerStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+          }
+          return;
+        }
+        if (focusUrlBlockerStatusEl) {
+          focusUrlBlockerStatusEl.textContent = `Sauvegarde OK (${rules.length} règle(s)).`;
+        }
+      }
+    );
   });
 }
 
@@ -366,11 +428,25 @@ if (urlBlockerInputEl) {
     e.preventDefault();
     const value = (urlBlockerInputEl.value || "").trim();
     if (!value) return;
-    if (!urlBlockerRules.includes(value)) {
-      urlBlockerRules.push(value);
+    if (!alwaysUrlBlockerRules.includes(value)) {
+      alwaysUrlBlockerRules.push(value);
       renderUrlBlockerRules();
     }
     urlBlockerInputEl.value = "";
+  });
+}
+
+if (focusUrlBlockerInputEl) {
+  focusUrlBlockerInputEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const value = (focusUrlBlockerInputEl.value || "").trim();
+    if (!value) return;
+    if (!focusUrlBlockerRules.includes(value)) {
+      focusUrlBlockerRules.push(value);
+      renderFocusUrlBlockerRules();
+    }
+    focusUrlBlockerInputEl.value = "";
   });
 }
 
@@ -399,7 +475,6 @@ if (focusSaveBtn) {
       focusModeEnabled,
       pomodoroWork: Number.isFinite(work) ? work : 25,
       pomodoroBreak: Number.isFinite(rest) ? rest : 5,
-      urlBlockerEnabled: focusModeEnabled,
     });
     if (focusStatusEl) focusStatusEl.textContent = "Mode focus sauvegardé.";
     chrome.runtime.sendMessage({ type: "URL_BLOCKER_RECHECK" }, () => {});
@@ -1253,10 +1328,16 @@ if (importBtn) {
       loadTagRules();
       loadDeadlinePrefs();
       if (urlBlockerListEl) {
-        urlBlockerRules = Array.isArray(parsed?.local?.urlBlockerRules)
-          ? parsed.local.urlBlockerRules
+        alwaysUrlBlockerRules = Array.isArray(parsed?.local?.alwaysUrlBlockerRules)
+          ? parsed.local.alwaysUrlBlockerRules
           : [];
         renderUrlBlockerRules();
+      }
+      if (focusUrlBlockerListEl) {
+        focusUrlBlockerRules = Array.isArray(parsed?.local?.urlBlockerRules)
+          ? parsed.local.urlBlockerRules
+          : [];
+        renderFocusUrlBlockerRules();
       }
       if (widgetEventsEl) {
         const widgets = parsed?.local?.dashboardWidgets || {};

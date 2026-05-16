@@ -328,8 +328,8 @@
         </section>
 
         <section class="card">
-          <h3 class="section-title">URL Blocker</h3>
-          <p class="note">Règles de blocage Focus. Une URL ou domaine par ligne.</p>
+          <h3 class="section-title">URL Blocker Always On</h3>
+          <p class="note">Bloqué en permanence, même hors pomodoro. Une URL ou domaine par ligne.</p>
           <input id="url-blocker-input" placeholder="ex: youtube.com" autocomplete="off" />
           <div class="chip-list" id="url-blocker-list"></div>
           <div class="actions" style="margin-top: 12px;">
@@ -338,6 +338,17 @@
           </div>
           <p class="note" id="url-blocker-status"></p>
           <div id="url-blocker-logs" class="url-blocker-logs"></div>
+        </section>
+
+        <section class="card">
+          <h3 class="section-title">URL Blocker Pomodoro</h3>
+          <p class="note">Bloqué uniquement quand le pomodoro est en session de focus. Une URL ou domaine par ligne.</p>
+          <input id="focus-url-blocker-input" placeholder="ex: reddit.com" autocomplete="off" />
+          <div class="chip-list" id="focus-url-blocker-list"></div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="focus-url-blocker-save">Enregistrer liste focus</button>
+          </div>
+          <p class="note" id="focus-url-blocker-status"></p>
         </section>
 
         <section class="card">
@@ -358,7 +369,7 @@
 
         <section class="card">
           <h3 class="section-title">Mode Focus</h3>
-          <p class="note">Active le blocage + pomodoro.</p>
+          <p class="note">Active le pomodoro et la liste URL Blocker Pomodoro.</p>
           <label class="checkline"><input type="checkbox" id="focus-enabled" /> Activer mode focus</label>
           <div class="grid" style="margin-top: 10px;">
             <div>
@@ -612,4 +623,3 @@
   <script src="options.js"></script>
 </body>
 </html>
-

@@ -418,32 +418,29 @@ function renderFocusLogs(logs) {
 }
 
 function saveFocusRules() {
-  chrome.storage.local.get(["urlBlockerEnabled"], (data) => {
-    const enabled = data?.urlBlockerEnabled !== false;
-    chrome.runtime.sendMessage(
-      {
-        type: "SET_URL_BLOCKER_STATE",
-        payload: { enabled, rawRules: focusRules },
-      },
-      (res) => {
-        if (chrome.runtime.lastError) {
-          if (focusRuleStatusEl) {
-            focusRuleStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
-          }
-          return;
-        }
-        if (!res?.ok) {
-          if (focusRuleStatusEl) {
-            focusRuleStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
-          }
-          return;
-        }
+  chrome.runtime.sendMessage(
+    {
+      type: "SET_URL_BLOCKER_STATE",
+      payload: { rawRules: focusRules },
+    },
+    (res) => {
+      if (chrome.runtime.lastError) {
         if (focusRuleStatusEl) {
-          focusRuleStatusEl.textContent = `Règles focus sauvegardées (${focusRules.length}).`;
+          focusRuleStatusEl.textContent = `Erreur extension: ${chrome.runtime.lastError.message}`;
         }
+        return;
       }
-    );
-  });
+      if (!res?.ok) {
+        if (focusRuleStatusEl) {
+          focusRuleStatusEl.textContent = `Erreur: ${res?.error || "inconnue"}`;
+        }
+        return;
+      }
+      if (focusRuleStatusEl) {
+        focusRuleStatusEl.textContent = `Règles focus sauvegardées (${focusRules.length}).`;
+      }
+    }
+  );
 }
 
 function loadFocusRules() {
