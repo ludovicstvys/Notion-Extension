@@ -78,7 +78,14 @@ const URL_BLOCKER_RULES_KEY = "urlBlockerRules";
 const URL_BLOCKER_ENABLED_KEY = "urlBlockerEnabled";
 const URL_BLOCKER_LOGS_KEY = "urlBlockerLogs";
 const URL_BLOCKER_BASE_ID = 9000;
+const URL_BLOCKER_RULE_RANGE = 10000;
 const URL_BLOCKER_LOG_LIMIT = 80;
+const INSTAGRAM_DOMAIN = "instagram.com";
+const INSTAGRAM_BLOCK_FILTER = `||${INSTAGRAM_DOMAIN}^`;
+const INSTAGRAM_DIRECT_ALLOWED_PREFIX = "https://www.instagram.com/direct";
+const INSTAGRAM_DIRECT_ALLOW_REGEX = "^https://www\\.instagram\\.com/direct";
+const INSTAGRAM_BLOCK_RULE_ID = URL_BLOCKER_BASE_ID + URL_BLOCKER_RULE_RANGE - 2;
+const INSTAGRAM_DIRECT_ALLOW_RULE_ID = URL_BLOCKER_BASE_ID + URL_BLOCKER_RULE_RANGE - 1;
 const FOCUS_MODE_ENABLED_KEY = "focusModeEnabled";
 const FOCUS_API_BASE = "http://127.0.0.1:49172";
 const FOCUS_STATE_KEY = "focusBridgeState";
@@ -705,6 +712,28 @@ function normalizeText(input) {
   return text.normalize("NFC").trim();
 }
 
+function normalizeNotionUrl(input) {
+  const text = normalizeText(input);
+  if (!text) return "";
+
+  const candidates = [text];
+  if (/^(www\.|[a-z0-9-]+(\.[a-z0-9-]+)+([/?#]|$))/i.test(text) && !/^[a-z][a-z0-9+.-]*:/i.test(text)) {
+    candidates.push(`https://${text}`);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const u = new URL(candidate);
+      if (u.protocol === "http:" || u.protocol === "https:") {
+        return u.toString();
+      }
+    } catch (_) {
+      // Try the next candidate.
+    }
+  }
+  return "";
+}
+
 function normalizeToUrlFilter(input) {
   const s = normalizeText(input);
   if (!s) return null;
@@ -856,6 +885,18 @@ function isDomainMatch(host, domain) {
   return h === d || h.endsWith(`.${d}`);
 }
 
+function isAllowedInstagramDirectUrl(u) {
+  return (
+    u?.protocol === "https:" &&
+    u.hostname.toLowerCase() === `www.${INSTAGRAM_DOMAIN}` &&
+    u.href.startsWith(INSTAGRAM_DIRECT_ALLOWED_PREFIX)
+  );
+}
+
+function isInstagramUrl(u) {
+  return isDomainMatch(u?.hostname || "", INSTAGRAM_DOMAIN);
+}
+
 function shouldBlockUrl(url, urlFilters) {
   let u;
   try {
@@ -864,6 +905,8 @@ function shouldBlockUrl(url, urlFilters) {
     return false;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  if (isAllowedInstagramDirectUrl(u)) return false;
+  if (isInstagramUrl(u)) return true;
 
   const host = u.hostname;
   const path = `${u.pathname}${u.search}`;
@@ -1071,20 +1114,36 @@ async function applyUrlBlockerRules() {
 
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
   const removeRuleIds = existing
-    .filter((r) => r.id >= URL_BLOCKER_BASE_ID && r.id < URL_BLOCKER_BASE_ID + 10000)
+    .filter((r) => r.id >= URL_BLOCKER_BASE_ID && r.id < URL_BLOCKER_BASE_ID + URL_BLOCKER_RULE_RANGE)
     .map((r) => r.id);
 
-  if (!normalized.length) {
-    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules: [] });
-    return;
-  }
+  const configuredRules = normalized
+    .slice(0, URL_BLOCKER_RULE_RANGE - 2)
+    .map((urlFilter, i) => ({
+      id: URL_BLOCKER_BASE_ID + i,
+      priority: 1,
+      action: { type: "block" },
+      condition: { urlFilter, resourceTypes: ["main_frame", "sub_frame"] },
+    }));
 
-  const addRules = normalized.map((urlFilter, i) => ({
-    id: URL_BLOCKER_BASE_ID + i,
-    priority: 1,
-    action: { type: "block" },
-    condition: { urlFilter, resourceTypes: ["main_frame", "sub_frame"] },
-  }));
+  const addRules = [
+    {
+      id: INSTAGRAM_DIRECT_ALLOW_RULE_ID,
+      priority: 2,
+      action: { type: "allow" },
+      condition: {
+        regexFilter: INSTAGRAM_DIRECT_ALLOW_REGEX,
+        resourceTypes: ["main_frame", "sub_frame"],
+      },
+    },
+    {
+      id: INSTAGRAM_BLOCK_RULE_ID,
+      priority: 1,
+      action: { type: "block" },
+      condition: { urlFilter: INSTAGRAM_BLOCK_FILTER, resourceTypes: ["main_frame", "sub_frame"] },
+    },
+    ...configuredRules,
+  ];
 
   await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules });
 }
@@ -1131,7 +1190,6 @@ async function checkAllTabsForBlocker() {
     FOCUS_MODE_ENABLED_KEY,
   ]);
   const filters = getCombinedUrlFilters(data);
-  if (!filters.length) return;
 
   for (const tab of tabs) {
     const candidateUrl = tab.pendingUrl || tab.url || "";
@@ -2301,33 +2359,85 @@ function logTodoDebug(level, event, details) {
   }
 }
 
-async function findByUrl(token, dbId, url, map) {
+async function findByUrl(token, dbId, url, map, dbProps = null) {
+  const value = normalizeNotionUrl(url);
+  if (!value) return null;
+  const property = map?.url || "lien offre";
+  const prop = dbProps?.[property];
+  let filter = null;
+  if (!prop || prop.type === "url") {
+    filter = { property, url: { equals: value } };
+  } else if (prop.type === "rich_text") {
+    filter = { property, rich_text: { equals: value } };
+  } else if (prop.type === "title") {
+    filter = { property, title: { equals: value } };
+  } else {
+    return null;
+  }
   const body = {
-    filter: {
-      property: (map?.url || "lien offre"),
-      url: { equals: url },
-    },
+    filter,
   };
   const r = await notionFetch(token, `databases/${dbId}/query`, "POST", body);
   return r.results?.[0] || null;
 }
 
-function buildProps(data, map, statusMap) {
+function resolveStageNotesKey(props, map) {
+  const configured = normalizeText(map?.notes || "");
+  if (configured && props?.[configured]) return configured;
+  const exact =
+    findDbPropKeyByName(props, ["Notes", "Note", "Description", "Indication", "Processus"]) || "";
+  if (exact) return exact;
+  return findDbPropKeyByKeywords(props, ["note", "description", "indication", "process"], [
+    "rich_text",
+    "title",
+  ]);
+}
+
+function buildProps(data, map, statusMap, dbProps = null) {
   const m = map || {};
   const smap = statusMap || {};
-  const props = {
-    [m.jobTitle || "Job Title"]: { rich_text: [{ text: { content: normalizeText(data.title) || "Sans titre" } }] },
-    [m.company || "Entreprise"]: { title: [{ text: { content: normalizeText(data.company) || "" } }] },
-    [m.location || "Lieu"]: { rich_text: [{ text: { content: normalizeText(data.location) || "" } }] },
-    [m.url || "lien offre"]: { rich_text: [{ text: { content: normalizeText(data.url) || "" } }] },
-    [m.status || "Status"]: {
-      status: {
-        name: data.applied
-          ? (smap.applied || "Candidature envoyee")
-          : (smap.open || "Ouvert"),
-      },
-    },
+  const notes = normalizeText(data.notes || data.description || "").slice(0, 2000);
+  const notesKey = dbProps ? resolveStageNotesKey(dbProps, m) : (m.notes || "Notes");
+  const jobTitleKey = m.jobTitle || "Job Title";
+  const companyKey = m.company || "Entreprise";
+  const locationKey = m.location || "Lieu";
+  const urlKey = m.url || "lien offre";
+  const statusKey = m.status || "Status";
+  const buildMappedText = (key, value, fallback) => {
+    const prop = dbProps?.[key];
+    return prop ? (buildStageTextProperty(prop, value) || fallback) : fallback;
   };
+  const props = {
+    [jobTitleKey]: buildMappedText(jobTitleKey, normalizeText(data.title) || "Sans titre", {
+      rich_text: [{ text: { content: normalizeText(data.title) || "Sans titre" } }],
+    }),
+    [companyKey]: buildMappedText(companyKey, data.company, {
+      title: [{ text: { content: normalizeText(data.company) || "" } }],
+    }),
+    [locationKey]: buildMappedText(locationKey, data.location, {
+      rich_text: [{ text: { content: normalizeText(data.location) || "" } }],
+    }),
+    [urlKey]: buildMappedText(urlKey, data.url, {
+      rich_text: [{ text: { content: normalizeText(data.url) || "" } }],
+    }),
+    [statusKey]: buildMappedText(
+      statusKey,
+      data.applied ? (smap.applied || "Candidature envoyee") : (smap.open || "Ouvert"),
+      {
+        status: {
+          name: data.applied
+            ? (smap.applied || "Candidature envoyee")
+            : (smap.open || "Ouvert"),
+        },
+      }
+    ),
+  };
+  if (notes && notesKey) {
+    const notesProp = dbProps?.[notesKey];
+    props[notesKey] = notesProp
+      ? (buildStageTextProperty(notesProp, notes) || { rich_text: [{ text: { content: notes } }] })
+      : { rich_text: [{ text: { content: notes } }] };
+  }
   if (data.applied) {
     props[m.applicationDate || "Application Date"] = { date: { start: todayISODate() } };
   }
@@ -2627,11 +2737,12 @@ async function upsertToNotionNow(payload) {
   const map = notionFieldMap || {};
   const statusMap = notionStatusMap || {};
 
-  let existing = await findByUrl(token, normalizedDbId, payload.url, map);
+  const db = await notionFetch(token, `databases/${normalizedDbId}`, "GET");
+  let existing = await findByUrl(token, normalizedDbId, payload.url, map, db.properties || {});
   if (!existing) {
     existing = await findDuplicateStageBySmartMatch(token, normalizedDbId, payload, map);
   }
-  const properties = buildProps(payload, map, statusMap);
+  const properties = buildProps(payload, map, statusMap, db.properties || {});
 
   if (existing) {
     await notionFetch(token, `pages/${existing.id}`, "PATCH", { properties });
@@ -3071,7 +3182,7 @@ async function applyStageQualityFix(payload) {
   } else if (field === "url" && value) {
     const prop = db.properties?.[urlKey];
     if (prop?.type === "url") {
-      properties[urlKey] = { url: value };
+      properties[urlKey] = { url: normalizeNotionUrl(value) || null };
     } else {
       properties[urlKey] = { rich_text: [{ text: { content: value } }] };
     }
@@ -3174,7 +3285,7 @@ function buildStageTextProperty(prop, value) {
     return { rich_text: text ? [{ text: { content: text } }] : [] };
   }
   if (prop.type === "url") {
-    return { url: text || null };
+    return { url: normalizeNotionUrl(text) || null };
   }
   if (prop.type === "date") {
     const parsed = parseDateFromText(text);
@@ -3913,6 +4024,8 @@ function compactQueuedNotionPayload(payload) {
     location: trimStorageText(payload?.location, 160),
     url: trimStorageText(payload?.url, 1024),
     applied: !!payload?.applied,
+    description: trimStorageText(payload?.description, 2000),
+    notes: trimStorageText(payload?.notes, 2000),
     datePosted: trimStorageText(payload?.datePosted, 40),
     startDate: trimStorageText(payload?.startDate, 40),
     role: trimStorageText(payload?.role, 160),
@@ -6969,13 +7082,15 @@ async function flushOfflineQueue() {
 
 if (chrome.declarativeNetRequest.onRuleMatchedDebug) {
   chrome.declarativeNetRequest.onRuleMatchedDebug.addListener((info) => {
+    const ruleId = info?.rule?.ruleId || info?.ruleId || 0;
+    if (ruleId === INSTAGRAM_DIRECT_ALLOW_RULE_ID) return;
     queueUrlBlockerLog({
       ts: Date.now(),
       url: info?.request?.url || "",
       type: info?.request?.type || "unknown",
       action: "blocked",
       source: "dnr-debug",
-      ruleId: info?.rule?.ruleId || info?.ruleId || 0,
+      ruleId,
     });
   });
 }
@@ -7118,7 +7233,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     ])
     .then((data) => {
       const filters = getCombinedUrlFilters(data);
-      if (!filters.length) return;
       if (shouldBlockUrl(candidateUrl, filters)) {
         queueUrlBlockerLog({
           ts: Date.now(),

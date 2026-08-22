@@ -87,6 +87,7 @@ const mapFields = {
   startMonth: document.getElementById("map-start-month"),
   role: document.getElementById("map-role"),
   type: document.getElementById("map-type"),
+  notes: document.getElementById("map-notes"),
 };
 
 const DEFAULTS = self?.EXTENSION_DEFAULTS || {};

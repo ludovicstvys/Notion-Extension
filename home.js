@@ -536,12 +536,78 @@ function applyWidgetPreferences() {
   });
 }
 
-function scrapeJobInfo() {
+async function scrapeJobInfo() {
   const url = location.href;
+  const host = location.hostname.toLowerCase();
 
   const getMeta = (sel) => document.querySelector(sel)?.content?.trim() || "";
   const ogTitle = getMeta('meta[property="og:title"]');
   const ogDesc = getMeta('meta[property="og:description"]') || getMeta('meta[name="description"]');
+  const cleanText = (input) =>
+    (input || "")
+      .toString()
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+  const pick = (...values) => values.map(cleanText).find(Boolean) || "";
+  const textFromNode = (selector) => {
+    const el = document.querySelector(selector);
+    return cleanText(el?.innerText || el?.textContent || "");
+  };
+  const valueByKeys = (obj, keys, depth = 0, seen = new WeakSet()) => {
+    if (!obj || typeof obj !== "object" || depth > 6 || seen.has(obj)) return "";
+    seen.add(obj);
+    if (Array.isArray(obj)) {
+      return obj
+        .map((item) =>
+          item && typeof item === "object"
+            ? valueByKeys(item, keys, depth + 1, seen)
+            : cleanText(item)
+        )
+        .filter(Boolean)
+        .join(", ");
+    }
+    const entries = Object.entries(obj);
+    const match = entries.find(([key]) => keys.includes(key.toLowerCase()));
+    if (!match) {
+      for (const [, nested] of entries) {
+        if (!nested || typeof nested !== "object") continue;
+        const found = valueByKeys(nested, keys, depth + 1, seen);
+        if (found) return found;
+      }
+      return "";
+    }
+    const value = match[1];
+    if (Array.isArray(value)) {
+      return value
+        .map((item) =>
+          item && typeof item === "object"
+            ? valueByKeys(item, keys, depth + 1, seen)
+            : cleanText(item)
+        )
+        .filter(Boolean)
+        .join(", ");
+    }
+    if (value && typeof value === "object") {
+      return (
+        valueByKeys(value, [
+          ...keys,
+          "name",
+          "title",
+          "label",
+          "text",
+          "addresslocality",
+          "addressregion",
+          "addresscountry",
+        ], depth + 1, seen) || cleanText(value.name || value.title || value.label || value.text)
+      );
+    }
+    return cleanText(value);
+  };
 
   function extractDateText(input) {
     const text = (input || "").replace(/\s+/g, " ").trim();
@@ -549,40 +615,296 @@ function scrapeJobInfo() {
 
     const monthYear =
       /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}\b/i;
-    if (monthYear.test(text)) return text.match(monthYear)[0];
-
+    const dayMonthYear = /\b\d{1,2}\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}\b/i;
+    const iso = /\b\d{4}-\d{2}-\d{2}\b/;
     const datePattern = /\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}\b/;
-    if (datePattern.test(text)) return text.match(datePattern)[0];
+    const frenchMonth =
+      /\b\d{1,2}\s+(janvier|fevrier|février|mars|avril|mai|juin|juillet|aout|août|septembre|octobre|novembre|decembre|décembre)\s+\d{4}\b/i;
 
+    return (
+      text.match(monthYear)?.[0] ||
+      text.match(dayMonthYear)?.[0] ||
+      text.match(iso)?.[0] ||
+      text.match(datePattern)?.[0] ||
+      text.match(frenchMonth)?.[0] ||
+      ""
+    );
+  }
+
+  function findDateNearLabel(labelRegex) {
+    // Avoid walking every container on large job boards. Reading `innerText` from
+    // thousands of nested divs repeatedly forces layout and can freeze the page.
+    const candidates = Array.from(
+      document.querySelectorAll("dt, dd, label, span, p, li, strong, b")
+    ).slice(0, 600);
+    for (const el of candidates) {
+      const text = (el.textContent || "").trim();
+      if (!text || !labelRegex.test(text)) continue;
+      const nearby = [];
+      if (el.nextElementSibling) nearby.push(el.nextElementSibling);
+      if (el.parentElement) {
+        const siblings = Array.from(el.parentElement.children || []);
+        const idx = siblings.indexOf(el);
+        if (idx >= 0 && idx + 1 < siblings.length) nearby.push(siblings[idx + 1]);
+        if (el.parentElement.nextElementSibling) nearby.push(el.parentElement.nextElementSibling);
+      }
+      for (const node of nearby) {
+        const val = extractDateText(node?.textContent || "");
+        if (val) return val;
+      }
+      const inline = extractDateText(text.replace(labelRegex, " "));
+      if (inline) return inline;
+    }
+    const bodyText = document.body?.innerText || "";
+    const match = bodyText.match(new RegExp(`${labelRegex.source}\\s*[:\\-]?\\s*([^\\n]{0,90})`, "i"));
+    return extractDateText(match?.[1] || "");
+  }
+
+  function flattenJson(value, out = [], depth = 0, seen = new WeakSet()) {
+    if (!value || typeof value !== "object" || depth > 6 || seen.has(value)) return out;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((item) => flattenJson(item, out, depth + 1, seen));
+      return out;
+    }
+    out.push(value);
+    Object.values(value).forEach((item) => flattenJson(item, out, depth + 1, seen));
+    return out;
+  }
+
+  function isJobPosting(obj) {
+    const type = obj?.["@type"] || obj?.type;
+    return type === "JobPosting" || (Array.isArray(type) && type.includes("JobPosting"));
+  }
+
+  function jobFromObject(obj) {
+    if (!obj || typeof obj !== "object") return {};
+    return {
+      title: valueByKeys(obj, ["title", "jobtitle", "positiontitle", "name"]),
+      company:
+        valueByKeys(obj?.hiringOrganization, ["name", "title"]) ||
+        valueByKeys(obj, ["company", "companyname", "employername", "organizationname", "legalname"]),
+      location:
+        valueByKeys(obj?.jobLocation, [
+          "name",
+          "text",
+          "addresslocality",
+          "addressregion",
+          "addresscountry",
+        ]) || valueByKeys(obj, ["location", "locationstext", "locations", "city", "country"]),
+      datePosted: valueByKeys(obj, ["dateposted", "postedon", "publicationdate", "createdat"]),
+      startDate: valueByKeys(obj, ["startdate", "jobstartdate"]),
+      deadline: valueByKeys(obj, ["validthrough", "deadline", "closingdate", "applicationdeadline"]),
+      description: valueByKeys(obj, ["description", "jobdescription", "descriptionhtml", "content", "body"]),
+    };
+  }
+
+  function bestJobFromJson(value) {
+    const objects = flattenJson(value);
+    return (
+      objects.find(isJobPosting) ||
+      objects
+        .map((obj) => ({ obj, data: jobFromObject(obj) }))
+        .filter(({ data }) => data.title && (data.description || data.company || data.location))
+        .sort((a, b) => cleanText(b.data.description).length - cleanText(a.data.description).length)[0]?.obj ||
+      null
+    );
+  }
+
+  function parseJsonScripts() {
+    const scripts = Array.from(
+      document.querySelectorAll('script[type="application/ld+json"], script#__NEXT_DATA__, script[type="application/json"]')
+    );
+    for (const script of scripts) {
+      try {
+        const found = bestJobFromJson(JSON.parse(script.textContent || "{}"));
+        if (found) return found;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  function parseWindowState() {
+    const values = [];
+    [
+      "__NEXT_DATA__",
+      "__NUXT__",
+      "__APOLLO_STATE__",
+      "__INITIAL_STATE__",
+      "__PRELOADED_STATE__",
+      "initialState",
+      "workday",
+    ].forEach((name) => {
+      try {
+        if (window[name]) values.push(window[name]);
+      } catch (_) {}
+    });
+    try {
+      Object.keys(localStorage || {}).forEach((key) => {
+        if (!/(job|offer|posting|state|persist|sainoo|workday|efc|efinancial)/i.test(key)) return;
+        const raw = localStorage.getItem(key);
+        if (raw && /^[\[{]/.test(raw.trim())) values.push(JSON.parse(raw));
+      });
+    } catch (_) {}
+    return values.map(bestJobFromJson).find(Boolean) || null;
+  }
+
+  async function fetchWorkdayJob() {
+    if (!/myworkdayjobs\.com$/i.test(host)) return null;
+    const match = location.pathname.match(/\/job\/([^/?#]+)/i);
+    const wd = window.workday || {};
+    const tenant = wd.tenant || host.split(".")[0];
+    const siteId = wd.siteId || location.pathname.split("/").filter(Boolean)[1] || "External";
+    const posting = decodeURIComponent(match?.[1] || "");
+    if (!tenant || !siteId || !posting) return null;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetch(`/wday/cxs/${tenant}/${siteId}/job/${encodeURIComponent(posting)}`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const info = data?.jobPostingInfo || data?.job || data;
+      return {
+        title: info.title || info.jobTitle || "",
+        company: info.hiringOrganization?.name || info.company || getMeta('meta[property="og:site_name"]') || "",
+        location: info.location || info.locationsText || info.jobLocation || "",
+        datePosted: info.postedOn || info.datePosted || "",
+        startDate: info.startDate || "",
+        deadline: info.validThrough || "",
+        description: info.jobDescription || info.description || "",
+      };
+    } catch (_) {
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  function domainCompanyFallback() {
+    if (/sainoo\.com$/i.test(host)) {
+      return host
+        .replace(/\.sainoo\.com$/i, "")
+        .replace(/[-_]+/g, " ")
+        .replace(/\b\w/g, (m) => m.toUpperCase());
+    }
+    if (/myworkdayjobs\.com$/i.test(host)) return host.split(".")[0].replace(/[-_]+/g, " ");
     return "";
   }
 
-  const jsonLd = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
-    .map((el) => {
-      try {
-        return JSON.parse(el.textContent || "{}");
-      } catch (_) {
-        return null;
-      }
-    })
-    .filter(Boolean);
+  function bestDescriptionBlockText() {
+    const selectors = [
+      '[data-testid*="description" i]',
+      '[data-test*="description" i]',
+      '[data-qa*="description" i]',
+      '[id*="description" i]',
+      '[class*="description" i]',
+      '[data-testid*="job-offer" i]',
+      '[class*="job-offer" i]',
+      '[class*="offer" i]',
+      '[class*="posting" i]',
+      "article",
+      "main section",
+      "main",
+    ];
+    const nodes = [];
+    selectors.forEach((selector) => {
+      document.querySelectorAll(selector).forEach((node) => nodes.push(node));
+    });
+    document.querySelectorAll("section, article, main, [role='main']").forEach((node) => {
+      const text = cleanText(node.innerText || node.textContent || "");
+      if (text.length >= 250) nodes.push(node);
+    });
+    const pageText = cleanText(document.body?.innerText || "");
+    const blacklist = /\b(apply|postuler|save|share|login|sign in|connexion|cookies|security checkup)\b/i;
+    return nodes
+      .slice(0, 250)
+      .map((node) => cleanText(node.innerText || node.textContent || ""))
+      .filter((text, index, arr) => text.length >= 180 && text !== pageText && !blacklist.test(text.slice(0, 160)) && arr.indexOf(text) === index)
+      .sort((a, b) => {
+        const score = (text) =>
+          text.length +
+          (/\b(role|responsibilities|missions|profile|candidate|requirements|private equity|internship|stage)\b/i.test(text)
+            ? 1000
+            : 0);
+        return score(b) - score(a);
+      })[0] || "";
+  }
 
-  const job = jsonLd
-    .flatMap((item) => (Array.isArray(item) ? item : [item]))
-    .find((item) => item?.["@type"] === "JobPosting");
+  const workdayJob = await fetchWorkdayJob();
+  const job = workdayJob || parseJsonScripts() || parseWindowState();
+  const jobData = jobFromObject(job);
 
-  const title = job?.title || ogTitle || document.title || "";
-  const company = job?.hiringOrganization?.name || getMeta('meta[name="company"]') || "";
-  const locationStr =
-    job?.jobLocation?.address?.addressLocality ||
-    job?.jobLocation?.address?.addressRegion ||
-    job?.jobLocation?.address?.addressCountry ||
-    getMeta('meta[property="job:location"]') ||
-    "";
-  const datePosted = extractDateText(job?.datePosted || "");
-  const startDate = extractDateText(job?.jobStartDate || "");
-  const deadline = extractDateText(job?.validThrough || "");
-  const description = job?.description || ogDesc || "";
+  const title = pick(
+    workdayJob?.title,
+    jobData.title,
+    textFromNode('[data-automation-id="jobPostingHeader"]'),
+    textFromNode('[data-testid*="job-title" i]'),
+    textFromNode('[class*="job-title" i]'),
+    textFromNode("h1"),
+    ogTitle,
+    document.title
+  );
+  const company = pick(
+    workdayJob?.company,
+    jobData.company,
+    textFromNode('[data-automation-id="company"]'),
+    textFromNode('[data-testid*="company" i]'),
+    textFromNode('[class*="company" i]'),
+    getMeta('meta[property="og:site_name"]'),
+    domainCompanyFallback()
+  );
+  const locationStr = pick(
+    workdayJob?.location,
+    jobData.location,
+    textFromNode('[data-automation-id="locations"]'),
+    textFromNode('[data-testid*="location" i]'),
+    textFromNode('[class*="location" i]'),
+    getMeta('meta[property="job:location"]')
+  );
+  let datePosted = pick(workdayJob?.datePosted, extractDateText(jobData.datePosted));
+  if (!datePosted) {
+    datePosted = findDateNearLabel(/\b(date posted|posted|publication|publiee|publiée)\b/i);
+  }
+  let deadline = pick(workdayJob?.deadline, extractDateText(jobData.deadline));
+  if (!deadline) {
+    deadline = findDateNearLabel(/\b(deadline|closing date|application deadline|date limite|fermeture)\b/i);
+  }
+  let startDate = pick(
+    workdayJob?.startDate,
+    extractDateText(jobData.startDate),
+    getMeta('meta[property="job:start_date"]'),
+    getMeta('meta[name="start_date"]')
+  );
+  if (!startDate) {
+    startDate = findDateNearLabel(/\b(start date|date de debut|date de début|debut|début)\b/i);
+  }
+  let description = pick(
+    workdayJob?.description,
+    jobData.description,
+    textFromNode('[data-automation-id="jobPostingDescription"]'),
+    textFromNode('[data-testid*="description" i]'),
+    textFromNode('[class*="job-description" i]'),
+    textFromNode('[class*="description" i]'),
+    textFromNode("article"),
+    ogDesc
+  );
+  if (!description || description.length < 120) {
+    const blockDescription = bestDescriptionBlockText();
+    if (blockDescription.length > description.length) description = blockDescription;
+  }
+  if (!description || description.length < 120) {
+    const pageText = cleanText(document.body?.innerText || "");
+    if (pageText.length > description.length) {
+      const marker = pageText.match(/\b(job description|description du poste|responsibilities|missions)\b/i);
+      description = marker
+        ? pageText.slice(marker.index, marker.index + 2500).trim()
+        : bestDescriptionBlockText() || description;
+    }
+  }
 
   return {
     title,
@@ -602,10 +924,20 @@ async function extractFromPage() {
   if (addBtn) addBtn.disabled = true;
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: scrapeJobInfo,
-    });
+    let injection;
+    try {
+      injection = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: scrapeJobInfo,
+        world: "MAIN",
+      });
+    } catch (err) {
+      injection = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: scrapeJobInfo,
+      });
+    }
+    const [{ result }] = injection;
     extracted = result;
     if (addStatusEl) addStatusEl.textContent = "Prêt à ajouter.";
     if (addBtn) addBtn.disabled = false;
